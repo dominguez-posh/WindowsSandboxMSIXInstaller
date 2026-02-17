@@ -2,8 +2,6 @@
 
 #Enable-WindowsOptionalFeature -FeatureName "Containers-DisposableClientVM" -All -Online
 
-
-
 ##Download MSIPackagingTool
 
 $sourceUrl = "https://download.microsoft.com/download/e/2/e/e2e923b2-7a3a-4730-969d-ab37001fbb5e/MSIXPackagingtoolv1.2024.405.0.msixbundle"
@@ -90,25 +88,40 @@ Add-WindowsPackage -Online -PackagePath $destinationPath
 
 Add-AppxProvisionedPackage -Online -PackagePath $msixbundle -LicensePath $Licensefile
 
-
+Write-Host "Alle Verbindungen erstellt... Nun kann ein neues selbst signiertes Zertifikat erstellt werden, oder ein öffentliches verwendet werden..."
 
 
 ###Zertifikat für MSIX Package Installieren
 
-$cert = New-SelfSignedCertificate -Type Custom `
-  -Subject "CN=unique-projects" `
-  -KeyUsage DigitalSignature `
-  -FriendlyName "MSIX-Installer-Zertifikat-up-LuDo" `
-  -CertStoreLocation "Cert:\CurrentUser\My" `
-  -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}") `
-  -NotAfter (Get-Date).AddYears(100)
+if ((Read-Host "Create New Password? (Y)") -like "y"){
 
+    $cert = New-SelfSignedCertificate -Type Custom `
+      -Subject "CN=unique-projects" `
+      -KeyUsage DigitalSignature `
+      -FriendlyName "MSIX-Installer-Zertifikat-up-LuDo" `
+      -CertStoreLocation "Cert:\CurrentUser\My" `
+      -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}") `
+      -NotAfter (Get-Date).AddYears(200)
 
+    $Password = Read-Host "Enter Password for new Certificate" -AsSecureString
 
-$password = ConvertTo-SecureString -String "!P4sswort123!" -Force -AsPlainText
-Export-PfxCertificate -cert $cert -FilePath "C:\Temp\MSIXCert.pfx" -Password $password
+    Read-Host "REMEMBER PASSWORD !IMPORTANT!... ANY KEY TO CONTINUE"
 
-CLS
-write-host ""
-Write-Host "You Can now use The Tool 'MSIX Packaging Tool'... yay "
-Write-Host "Use The Certificate unter C Temp MSIXCert.pfx with the Password: !P4sswort123!"
+    $NewCertPath = Join-Path  (Join-Path  $env:PUBLIC "Desktop" ) "NewCertificate.pfx"
+
+    $NewPubCertPath = Join-Path  (Join-Path  $env:PUBLIC "Desktop" ) "NewCertificatePubKey.cer"
+
+    #$password = ConvertTo-SecureString -String "!P4sswort123!" -Force -AsPlainText
+    Export-PfxCertificate -cert $cert -FilePath $NewCertPath -Password $Password 
+
+    Export-Certificate -Cert $cert -FilePath $NewPubCertPath -Type CERT
+
+    CLS
+    write-host ""
+    Write-Host "You Can now use The Tool 'MSIX Packaging Tool'... yay "
+    Write-Host "Use The Certificate unter C Temp MSIXCert.pfx"
+    Write-Host "!YOU NEED TO IMPORT THE CERTIFICATE 'NewCertificatePubKey' in your intune Configuration, remember to save it before shutting down the sandbox!" -BackgroundColor Red
+
+    Read-Host "ANY KEY TO CONTINUE..."
+
+}
