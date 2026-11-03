@@ -1,6 +1,6 @@
 # MSIX Sandbox Studio
 
-Repackage classic installers (MSI/EXE) into **signed, tested MSIX packages**, using a fresh
+Build **signed, tested MSIX packages** and **Win32 apps (.intunewin)** from classic installers, using a fresh
 **Windows Sandbox** for every run, and publish them to **Microsoft Intune**. Comes as a
 PowerShell module plus a desktop GUI.
 
@@ -27,6 +27,32 @@ starts from the same state and nothing is left on the host.
 | **Test** | Installs the package in a second fresh sandbox (certificate trusted, network off), starts every app, takes screenshots and uninstalls it again. |
 | **Intune** | Uploads the package as a line-of-business app via Microsoft Graph (new app or new version of an existing one) and assigns it to a group. It can also create the trusted-certificate profile, so devices trust your packages. |
 | **Interactive** | Opens a sandbox with the Packaging Tool installed and a shared folder, for apps that need manual steps. |
+
+## Win32 apps (.intunewin)
+
+At start the tool asks what you want to build: **MSIX package** or **Win32 app (.intunewin)**.
+Switch at any time with the mode button in the header.
+
+| Step | What happens |
+|------|--------------|
+| **Design** | Choose the installer. Generated from it: `Install.ps1`, `Uninstall.ps1`, `Detect.ps1` and optionally `Update.ps1`, which runs at the start of the installation, e.g. to remove a previous version or migrate settings. All four can be edited in the tool. Logs go to the Intune Management Extension log folder. |
+| **Detection** | Script (`Detect.ps1`), MSI product code (optionally minimum version), file or folder (optionally minimum version), or registry key/value. |
+| **Intune settings** | Install behavior (system/user), restart behavior, architecture, minimum Windows version, return codes (0, 1707, 3010, 1641, 1618). |
+| **Test lab** | A fresh sandbox opens the **Win32 Test Lab**: **Install**, **Detect**, **Uninstall**, **Detect** with one click each. Commands run as SYSTEM through a scheduled task, like the Intune Management Extension runs them (switchable). Each step shows exit code or detection result and output, and takes a screenshot. If something fails, open the script right there, fix it and run the step again. Edited scripts go back into the project. **Report failure** (with a note) or **Finish: success** ends the session. |
+| **Update test** | **Test update from previous build** installs the chosen older build first, detects it, then installs the new version over it, detects it, uninstalls and detects again. So the update path is tested exactly. |
+| **Build** | Creates the `.intunewin` in the format of the Microsoft Win32 Content Prep Tool, without needing the tool. Next to it: **`intune-app.json`**, the parameter file with every Intune setting, the Graph detection rule, hashes and the test result. Also the HTML documentation: settings, test protocol with every step and screenshot, documented clicks, all scripts, package content. |
+| **Publish wizard** | 1. app details, 2. the Intune app this one **supersedes** (search the tenant; *update* installs over it, *replace* uninstalls it first), 3. group and intent, 4. summary, then upload. |
+
+PowerShell equivalent:
+
+```powershell
+$app = Save-Win32AppProject -DisplayName 'Contoso Tool' -Publisher Contoso -Version 2.4.1 `
+    -InstallerPath C:\Installers\contoso-setup.exe -InstallArguments '/S' -WithUpdateScript
+Start-Win32TestLab -Id $app.Id                                    # new installation
+Start-Win32TestLab -Id $app.Id -BaseBuild .\Workspace\Output\Win32\ContosoTool_2.3.0   # update test
+$build = New-Win32AppPackage -Id $app.Id                          # .intunewin + intune-app.json + documentation
+Publish-Win32AppToIntune -BuildPath $build.BuildPath -SupersedeAppId <old-app-id> -SupersedenceType update -GroupId <group-id>
+```
 
 ## Requirements
 

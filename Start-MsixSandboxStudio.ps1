@@ -137,8 +137,8 @@ function Add-Click {
     param($Control, [scriptblock]$Action)
     $script:ClickActions[$Control] = $Action
     $Control.Add_Click({
-        param($sender)
-        try { & $script:ClickActions[$sender] } catch { Show-Error $_.Exception.Message }
+        param($src)
+        try { & $script:ClickActions[$src] } catch { Show-Error $_.Exception.Message }
     })
 }
 
@@ -198,7 +198,8 @@ function Set-Busy([string]$Title) {
     $on = [bool]$Title
     $ui.BusyPanel.Visibility = if ($on) { 'Visible' } else { 'Collapsed' }
     $ui.BusyText.Text = $Title
-    foreach ($b in 'BtnBuild', 'BtnBuildTest', 'BtnBuildAll', 'BtnPkgTest', 'BtnPkgSign', 'BtnPkgPublish', 'BtnPkgUpdate', 'BtnDashSandbox', 'BtnDashRecord', 'BtnToolchainUpdate', 'BtnToolchainForce', 'BtnRecipeSave', 'BtnCertIntune') {
+    foreach ($b in 'BtnBuild', 'BtnBuildTest', 'BtnBuildAll', 'BtnPkgTest', 'BtnPkgSign', 'BtnPkgPublish', 'BtnPkgUpdate', 'BtnDashSandbox', 'BtnDashRecord', 'BtnToolchainUpdate', 'BtnToolchainForce', 'BtnRecipeSave', 'BtnCertIntune',
+            'BtnW32Test', 'BtnW32TestUpdate', 'BtnW32Build', 'BtnW32Save', 'BtnW32Generate', 'BtnW32Publish') {
         $ui[$b].IsEnabled = -not $on
     }
     if (-not $on) { Update-PackageButtons }
@@ -257,7 +258,7 @@ function Update-ConnectionStatus {
 }
 
 # ---------------------------------------------------------------- navigation + help
-$pages = @('Dashboard', 'Recipes', 'Packages', 'Certificate', 'Intune', 'Settings')
+$pages = @('Dashboard', 'Recipes', 'Packages', 'Certificate', 'Win32Apps', 'Win32Builds', 'Intune', 'Settings')
 $script:CurrentPage = 'Dashboard'
 function Show-Page([string]$Name) {
     $script:CurrentPage = $Name
@@ -270,13 +271,15 @@ function Show-Page([string]$Name) {
         'Certificate' { Update-CertificateView }
         'Intune'      { Update-IntuneView }
         'Settings'    { Update-SettingsView }
+        'Win32Apps'   { Update-Win32AppList }
+        'Win32Builds' { Update-Win32BuildList }
     }
     if ($ui.HelpPanel.Visibility -eq 'Visible') { Show-Help }
 }
 foreach ($p in $pages) {
     $ui["Nav$p"].Add_Checked({
-        param($sender)
-        $name = $sender.Name -replace '^Nav', ''
+        param($src)
+        $name = $src.Name -replace '^Nav', ''
         if ($ui["Page$name"].Visibility -ne 'Visible') { Show-Page $name }
     })
 }
@@ -301,6 +304,14 @@ $script:HelpTexts = @{
     Intune      = @(
         @('Sign in', 'Sign in (top right) opens the Microsoft sign-in in front of this window. Needed rights: manage Intune apps and device configurations, read groups.'),
         @('Assignment', 'Choose a group and the intent before publishing; without a group the app is only uploaded.'))
+    Win32Apps   = @(
+        @('Design', 'Choose the installer: install, uninstall and detection scripts are generated from it and can be edited here. The update routine (Update.ps1) runs at the start of the installation, e.g. to remove an old version.'),
+        @('Detection', 'Script: Detect.ps1 writes output and exits with 0 when the app is installed. Or use the MSI product code, a file/folder (optionally with minimum version) or a registry value.'),
+        @('Test in sandbox', 'Opens the Win32 Test Lab: Install, Detect, Uninstall, Detect with one click each, as SYSTEM like Intune. Check the app in between, fix scripts in the sandbox (they come back into the project), then report success or failure.'),
+        @('Test update', 'Choose a previous build: the lab installs it first, then the new version over it, so the update path is tested exactly.'))
+    Win32Builds = @(
+        @('Build', 'Each build contains the .intunewin, the parameter file intune-app.json (all Intune settings) and the documentation with the test protocol.'),
+        @('Publish', 'The wizard uploads the app, sets the previous version it supersedes (Update: install over it; Replace: uninstall it first) and the assignment.'))
     Settings    = @(
         @('Toolchain', 'MSIX Packaging Tool, its driver and the Windows SDK signing tools are cached on this computer and mapped read-only into every sandbox.'),
         @('Network', 'Packaging and recording sandboxes get network access when enabled (web installers). Test sandboxes never have network.'))
@@ -380,9 +391,16 @@ function Update-Dashboard {
            ActionText = $(if (-not ($c -and $c.Account)) { 'Sign in' })
            Action = { Connect-Intune } }
     )
+    if ($script:Mode -eq 'Win32') { $cards = @($cards | Where-Object { $_.Title -notin 'Toolchain', 'Signing certificate' }) }
     foreach ($card in $cards) { [void]$ui.ReadinessGrid.Children.Add((New-ReadinessCard @card)) }
-    $ui.StatRecipes.Text = @(Get-MsixRecipe).Count
-    $ui.StatPackages.Text = @(Get-ChildItem (Get-MsixWorkspace).Output -Filter '*.msix' -ErrorAction SilentlyContinue).Count
+    if ($script:Mode -eq 'Win32') {
+        $ui.GrpStat1.Header = 'Win32 apps'; $ui.StatRecipes.Text = @(Get-Win32AppProject).Count
+        $ui.GrpStat2.Header = 'Built .intunewin packages'; $ui.StatPackages.Text = @(Get-Win32AppBuild).Count
+    }
+    else {
+        $ui.GrpStat1.Header = 'Recipes'; $ui.StatRecipes.Text = @(Get-MsixRecipe).Count
+        $ui.GrpStat2.Header = 'Packages in output'; $ui.StatPackages.Text = @(Get-ChildItem (Get-MsixWorkspace).Output -Filter '*.msix' -ErrorAction SilentlyContinue).Count
+    }
     Update-SandboxState
     Update-ConnectionStatus
 }
@@ -765,6 +783,436 @@ Add-Click $ui.BtnTestPrevShot { if ($script:Shots.Count) { $script:ShotIndex = (
 Add-Click $ui.BtnTestNextShot { if ($script:Shots.Count) { $script:ShotIndex = ($script:ShotIndex + 1) % $script:Shots.Count; Show-Shot } }
 Add-Click $ui.BtnTestJob { if ($script:LastTestJob) { Start-Process explorer.exe $script:LastTestJob } }
 
+# ---------------------------------------------------------------- mode: MSIX or Win32
+$script:Mode = 'MSIX'
+function Set-AppMode([ValidateSet('MSIX', 'Win32')][string]$Mode) {
+    $script:Mode = $Mode
+    $msix = $Mode -eq 'MSIX'
+    foreach ($n in 'NavRecipes', 'NavPackages', 'NavCertificate') { $ui[$n].Visibility = if ($msix) { 'Visible' } else { 'Collapsed' } }
+    foreach ($n in 'NavWin32Apps', 'NavWin32Builds') { $ui[$n].Visibility = if ($msix) { 'Collapsed' } else { 'Visible' } }
+    $ui.GrpStartMsix.Visibility = if ($msix) { 'Visible' } else { 'Collapsed' }
+    $ui.GrpStartWin32.Visibility = if ($msix) { 'Collapsed' } else { 'Visible' }
+    $ui.BtnMode.Content = if ($msix) { 'Mode: MSIX' } else { 'Mode: Win32' }
+    $ui.FooterText.Text = if ($msix) { 'Packages are signed on this computer. Sandboxes only receive the public certificate.' } else { 'Win32 apps are tested in a fresh sandbox as SYSTEM, like the Intune Management Extension runs them.' }
+    $hidden = @{ MSIX = 'Win32Apps', 'Win32Builds'; Win32 = 'Recipes', 'Packages', 'Certificate' }[$Mode]
+    if ($script:CurrentPage -in $hidden) { Show-Page 'Dashboard' } elseif ($script:CurrentPage -eq 'Dashboard') { Update-Dashboard }
+}
+
+function Show-ModeDialog {
+    # Start question (MSIX or Win32); the answer is remembered when "Do not ask again" is ticked.
+    [xml]$x = Get-Content (Join-Path $PSScriptRoot 'UI\ModeWindow.xaml') -Raw -Encoding UTF8
+    $dlg = [Windows.Markup.XamlReader]::Load([System.Xml.XmlNodeReader]::new($x))
+    $dlg.Owner = $window
+    $script:ModeChoice = $null
+    $dlg.FindName('BtnChooseMsix').Add_Click({ $script:ModeChoice = 'MSIX'; $dlg.Close() })
+    $dlg.FindName('BtnChooseWin32').Add_Click({ $script:ModeChoice = 'Win32'; $dlg.Close() })
+    $remember = $dlg.FindName('ChkModeRemember')
+    $remember.IsChecked = -not (Get-MsixSettings).AskModeOnStart
+    [void]$dlg.ShowDialog()
+    if ($script:ModeChoice) {
+        Set-MsixSettings @{ Mode = $script:ModeChoice; AskModeOnStart = -not [bool]$remember.IsChecked } | Out-Null
+        Set-AppMode $script:ModeChoice
+    }
+}
+Add-Click $ui.BtnMode { Show-ModeDialog }
+
+# ---------------------------------------------------------------- Win32 apps (designer)
+$script:CurrentW32 = $null
+
+function Update-Win32AppList {
+    $selected = if ($script:CurrentW32) { $script:CurrentW32.Id } else { $null }
+    $ui.Win32AppList.Items.Clear()
+    foreach ($p in Get-Win32AppProject | Sort-Object DisplayName) {
+        $item = New-Object System.Windows.Controls.ListBoxItem
+        $test = if ($p.LastTest) { $p.LastTest.result } else { '' }
+        $badge = switch ($test) { 'Passed' { 'TESTED' } 'Failed' { 'TEST FAILED' } default { $p.InstallerType.ToUpper() } }
+        $color = switch ($test) { 'Passed' { 'green' } 'Failed' { 'yellow' } default { 'blue' } }
+        $item.Content = New-ListItemContent $p.DisplayName "$($p.Publisher)  $Dot  $($p.Version)" $badge $color
+        $item.Tag = $p
+        [void]$ui.Win32AppList.Items.Add($item)
+        if ($p.Id -eq $selected) { $item.IsSelected = $true }
+    }
+}
+
+function Set-ComboText($Combo, [string]$Text) {
+    foreach ($i in $Combo.Items) { if ($i.Content -eq $Text) { $Combo.SelectedItem = $i; return } }
+    $Combo.SelectedIndex = 0
+}
+
+function Update-W32DetectionView {
+    $ui.W32DetMsiPanel.Visibility = if ($ui.W32DetMsi.IsChecked) { 'Visible' } else { 'Collapsed' }
+    $ui.W32DetFilePanel.Visibility = if ($ui.W32DetFile.IsChecked) { 'Visible' } else { 'Collapsed' }
+    $ui.W32DetRegPanel.Visibility = if ($ui.W32DetReg.IsChecked) { 'Visible' } else { 'Collapsed' }
+}
+foreach ($n in 'W32DetScript', 'W32DetMsi', 'W32DetFile', 'W32DetReg') { $ui[$n].Add_Checked({ Update-W32DetectionView }) }
+
+function Clear-Win32Form {
+    $script:CurrentW32 = $null
+    $ui.Win32AppList.SelectedItem = $null
+    foreach ($n in 'TxtW32Name', 'TxtW32Publisher', 'TxtW32Description', 'TxtW32Installer', 'TxtW32Args', 'TxtW32DetectName',
+        'TxtW32Install', 'TxtW32Detect', 'TxtW32Uninstall', 'TxtW32UpdateScript', 'TxtW32ProductCode', 'TxtW32ProductVersion',
+        'TxtW32FilePath', 'TxtW32FileName', 'TxtW32FileVersion', 'TxtW32RegKey', 'TxtW32RegValue', 'TxtW32RegData') { $ui[$n].Text = '' }
+    $ui.TxtW32Version.Text = '1.0.0'
+    $ui.W32Title.Text = 'New Win32 app'
+    $ui.W32DetScript.IsChecked = $true
+    $ui.ChkW32Update.IsChecked = $false
+    foreach ($c in 'CmbW32RunAs', 'CmbW32Restart', 'CmbW32Arch', 'CmbW32MinOS') { $ui[$c].SelectedIndex = 0 }
+    $ui.TxtW32LastTest.Text = 'Not tested yet. Save, then "Test in sandbox".'
+    $ui.BtnW32Delete.IsEnabled = $false
+    Update-W32DetectionView
+}
+
+function Show-Win32App($p) {
+    $script:CurrentW32 = $p
+    $ui.W32Title.Text = "$($p.DisplayName) $($p.Version)"
+    $ui.TxtW32Name.Text = $p.DisplayName
+    $ui.TxtW32Publisher.Text = $p.Publisher
+    $ui.TxtW32Version.Text = $p.Version
+    $ui.TxtW32Description.Text = $p.Description
+    $ui.TxtW32Installer.Text = if ($p.InstallerFile) { Join-Path $p.SourcePath $p.InstallerFile } else { '' }
+    $ui.TxtW32Args.Text = $p.InstallArguments
+    $ui.TxtW32DetectName.Text = $p.DetectionName
+    $s = Get-Win32AppScript -Project $p
+    $ui.TxtW32Install.Text = $s['Install.ps1']
+    $ui.TxtW32Detect.Text = $s['Detect.ps1']
+    $ui.TxtW32Uninstall.Text = $s['Uninstall.ps1']
+    $ui.TxtW32UpdateScript.Text = $s['Update.ps1']
+    $ui.ChkW32Update.IsChecked = [bool]$s['Update.ps1']
+    $d = $p.Detection
+    switch ($d.Type) {
+        'MsiProductCode' { $ui.W32DetMsi.IsChecked = $true }
+        'File'           { $ui.W32DetFile.IsChecked = $true }
+        'Registry'       { $ui.W32DetReg.IsChecked = $true }
+        default          { $ui.W32DetScript.IsChecked = $true }
+    }
+    $ui.TxtW32ProductCode.Text = if ($d.ProductCode) { $d.ProductCode } else { $p.ProductCode }
+    $ui.TxtW32ProductVersion.Text = $d.ProductVersion
+    $ui.TxtW32FilePath.Text = $d.Path; $ui.TxtW32FileName.Text = $d.FileOrFolder; $ui.TxtW32FileVersion.Text = $d.FileVersion
+    $ui.TxtW32RegKey.Text = $d.KeyPath; $ui.TxtW32RegValue.Text = $d.ValueName; $ui.TxtW32RegData.Text = $d.RegistryValue
+    Set-ComboText $ui.CmbW32RunAs $p.RunAs
+    Set-ComboText $ui.CmbW32Restart $p.Restart
+    Set-ComboText $ui.CmbW32Arch $p.Architecture
+    Set-ComboText $ui.CmbW32MinOS $p.MinimumWindows
+    $t = $p.LastTest
+    $ui.TxtW32LastTest.Text = if ($t) {
+        "Last test: $($t.result) ($($t.scenario), $(([datetime]$t.date).ToString('g'))). $($t.message)" + $(if ($t.notes) { " Notes: $($t.notes)" }) + $(if ($t.changed) { " Scripts taken over from the sandbox: $($t.changed -join ', ')." })
+    } else { 'Not tested yet. Save, then "Test in sandbox".' }
+    $ui.W32LastTestBox.Background = if ($t -and $t.result -eq 'Passed') { ConvertTo-Brush '#DCFCE7' } elseif ($t) { ConvertTo-Brush '#FEE2E2' } else { Get-Brush 'InfoBackground' }
+    $ui.BtnW32Delete.IsEnabled = $true
+    Update-W32DetectionView
+}
+
+function Get-Win32Form {
+    if (-not $ui.TxtW32Name.Text.Trim()) { throw 'Display name is required.' }
+    if ($ui.TxtW32Version.Text -notmatch '^\d+(\.\d+){0,3}$') { throw 'Version must look like 1.2.3 or 1.2.3.4.' }
+    $installer = $ui.TxtW32Installer.Text.Trim()
+    if ($installer -and -not (Test-Path -LiteralPath $installer)) { throw 'The installer file does not exist.' }
+    $det = if ($ui.W32DetMsi.IsChecked) {
+        if (-not $ui.TxtW32ProductCode.Text.Trim()) { throw 'Enter the MSI product code.' }
+        $v = $ui.TxtW32ProductVersion.Text.Trim()
+        New-Win32Detection -Type MsiProductCode -ProductCode $ui.TxtW32ProductCode.Text.Trim() -ProductVersion $v -ProductVersionOperator $(if ($v) { 'greaterThanOrEqual' } else { 'notConfigured' })
+    }
+    elseif ($ui.W32DetFile.IsChecked) {
+        if (-not $ui.TxtW32FilePath.Text.Trim() -or -not $ui.TxtW32FileName.Text.Trim()) { throw 'Enter folder and file name for the detection.' }
+        $v = $ui.TxtW32FileVersion.Text.Trim()
+        New-Win32Detection -Type File -Path $ui.TxtW32FilePath.Text.Trim() -FileOrFolder $ui.TxtW32FileName.Text.Trim() -FileOperation $(if ($v) { 'version' } else { 'exists' }) -FileVersion $v
+    }
+    elseif ($ui.W32DetReg.IsChecked) {
+        if (-not $ui.TxtW32RegKey.Text.Trim()) { throw 'Enter the registry key for the detection.' }
+        $data = $ui.TxtW32RegData.Text.Trim()
+        New-Win32Detection -Type Registry -KeyPath $ui.TxtW32RegKey.Text.Trim() -ValueName $ui.TxtW32RegValue.Text.Trim() -RegistryOperation $(if ($data) { 'string' } else { 'exists' }) -RegistryValue $data
+    }
+    else { New-Win32Detection -Type Script }
+    $form = @{
+        DisplayName      = $ui.TxtW32Name.Text.Trim()
+        Publisher        = $ui.TxtW32Publisher.Text.Trim()
+        Version          = $ui.TxtW32Version.Text.Trim()
+        Description      = $ui.TxtW32Description.Text.Trim()
+        InstallArguments = $ui.TxtW32Args.Text.Trim()
+        DetectionName    = $ui.TxtW32DetectName.Text.Trim()
+        Detection        = $det
+        RunAs            = $ui.CmbW32RunAs.SelectedItem.Content
+        Restart          = $ui.CmbW32Restart.SelectedItem.Content
+        Architecture     = $ui.CmbW32Arch.SelectedItem.Content
+        MinimumWindows   = $ui.CmbW32MinOS.SelectedItem.Content
+    }
+    if ($script:CurrentW32) { $form.Id = $script:CurrentW32.Id }
+    # A new installer (outside the project's source folder) is copied in on save
+    if ($installer -and -not ($script:CurrentW32 -and $installer -eq (Join-Path $script:CurrentW32.SourcePath $script:CurrentW32.InstallerFile))) { $form.InstallerPath = $installer }
+    # Script editors: only when they have content (an empty editor gets the template)
+    $scripts = @{}
+    foreach ($pair in @(@('Install.ps1', 'TxtW32Install'), @('Detect.ps1', 'TxtW32Detect'), @('Uninstall.ps1', 'TxtW32Uninstall'))) {
+        if ($ui[$pair[1]].Text.Trim()) { $scripts[$pair[0]] = $ui[$pair[1]].Text }
+    }
+    $scripts['Update.ps1'] = if ($ui.ChkW32Update.IsChecked) { $ui.TxtW32UpdateScript.Text } else { '' }
+    if ($ui.ChkW32Update.IsChecked -and -not $ui.TxtW32UpdateScript.Text.Trim()) { $scripts.Remove('Update.ps1'); $form.WithUpdateScript = $true }
+    $form.Scripts = $scripts
+    $form
+}
+
+function Save-Win32Form {
+    $form = Get-Win32Form
+    $window.Cursor = 'Wait'
+    try { $p = Save-Win32AppProject @form } finally { $window.Cursor = $null }
+    Show-Win32App $p
+    Update-Win32AppList
+    $p
+}
+
+$ui.Win32AppList.Add_SelectionChanged({ if ($ui.Win32AppList.SelectedItem) { Show-Win32App $ui.Win32AppList.SelectedItem.Tag } })
+Add-Click $ui.BtnW32New { Clear-Win32Form }
+Add-Click $ui.BtnDashWin32New { Show-Page 'Win32Apps'; Clear-Win32Form }
+Add-Click $ui.BtnDashWin32Builds { Show-Page 'Win32Builds' }
+Add-Click $ui.BtnW32Refresh { Update-Win32AppList }
+Add-Click $ui.BtnW32Browse {
+    $dlg = New-Object Microsoft.Win32.OpenFileDialog
+    $dlg.Filter = 'Installers (*.msi;*.exe)|*.msi;*.exe|All files (*.*)|*.*'
+    if (-not $dlg.ShowDialog($window)) { return }
+    $info = Get-MsixInstallerInfo -Path $dlg.FileName
+    $ui.TxtW32Installer.Text = $info.Path
+    if (-not $ui.TxtW32Name.Text) { $ui.TxtW32Name.Text = $info.ProductName }
+    if (-not $ui.TxtW32Publisher.Text) { $ui.TxtW32Publisher.Text = $info.Manufacturer }
+    if (-not $script:CurrentW32 -or $ui.TxtW32Version.Text -eq '1.0.0') { $ui.TxtW32Version.Text = $info.Version }
+    if (-not $ui.TxtW32Args.Text) { $ui.TxtW32Args.Text = $info.SuggestedArguments }
+    if (-not $ui.TxtW32DetectName.Text) { $ui.TxtW32DetectName.Text = $info.ProductName }
+    if ($info.Type -eq 'MSI') {
+        try { $ui.TxtW32ProductCode.Text = (& (Get-Module MsixSandboxStudio) { param($f) (Get-MsiProperty -Path $f -Names 'ProductCode').ProductCode } $info.Path) } catch { }
+    }
+    Write-UiLog "Installer: $($info.Type), $($info.Framework). Save to copy it into the project; empty script editors are filled from the templates." 'Info'
+}
+Add-Click $ui.BtnW32Save { Save-Win32Form | Out-Null; Write-UiLog 'Win32 app saved.' 'Success' }
+Add-Click $ui.BtnW32Generate {
+    if ($script:CurrentW32) {
+        $answer = [System.Windows.MessageBox]::Show($window, 'Replace all scripts with freshly generated ones from the templates? Your changes to the scripts are lost.', 'Generate scripts', 'YesNo', 'Warning')
+        if ($answer -ne 'Yes') { return }
+    }
+    $form = Get-Win32Form
+    $form.Remove('Scripts')
+    $form.RegenerateScripts = $true
+    if ($ui.ChkW32Update.IsChecked) { $form.WithUpdateScript = $true }
+    $p = Save-Win32AppProject @form
+    if (-not $ui.ChkW32Update.IsChecked) { Remove-Item (Join-Path $p.SourcePath 'Update.ps1') -Force -ErrorAction SilentlyContinue }
+    Show-Win32App (Get-Win32AppProject -Id $p.Id)
+    Update-Win32AppList
+    Write-UiLog 'Scripts generated from the templates. Check the TODO places for EXE installers.' 'Success'
+}
+$ui.ChkW32Update.Add_Checked({
+    if (-not $ui.TxtW32UpdateScript.Text.Trim() -and $script:CurrentW32) {
+        $ui.TxtW32UpdateScript.Text = (Get-Win32ScriptTemplate -Project $script:CurrentW32)['Update.ps1']
+    }
+})
+Add-Click $ui.BtnW32Delete {
+    if (-not $script:CurrentW32) { return }
+    $answer = [System.Windows.MessageBox]::Show($window, "Delete the Win32 app '$($script:CurrentW32.DisplayName)' with its scripts and installer copy? Builds stay.", 'Delete', 'YesNo', 'Warning')
+    if ($answer -ne 'Yes') { return }
+    Remove-Win32AppProject -Id $script:CurrentW32.Id
+    Clear-Win32Form
+    Update-Win32AppList
+}
+
+function Start-Win32Lab([string]$BaseBuild) {
+    if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first (Windows runs one at a time).' }
+    $p = Save-Win32Form
+    $title = if ($BaseBuild) { "Test lab: update of $($p.DisplayName). Run the steps in the sandbox, then report the result" } else { "Test lab: $($p.DisplayName). Run Install, Detect, Uninstall in the sandbox, then report the result" }
+    Start-UiTask -Title $title -Arguments @{ Id = $p.Id; BaseBuild = $BaseBuild } -Work {
+        param($Id, $BaseBuild)
+        if ($BaseBuild) { Start-Win32TestLab -Id $Id -BaseBuild $BaseBuild } else { Start-Win32TestLab -Id $Id }
+    } -OnDone {
+        param($result, $err)
+        if ($script:CurrentW32) { Show-Win32App (Get-Win32AppProject -Id $script:CurrentW32.Id) }
+        Update-Win32AppList
+        if ($err -or -not $result) { return }
+        $r = $result[-1]
+        $icon = if ($r.Verdict -eq 'Passed') { 'Information' } else { 'Warning' }
+        $text = "Test lab: $($r.Verdict).`n$($r.Message)" + $(if ($r.ChangedScripts) { "`n`nScripts changed in the sandbox were taken into the project: $($r.ChangedScripts -join ', ')." })
+        [void][System.Windows.MessageBox]::Show($window, $text, 'Win32 Test Lab', 'OK', $icon)
+    }
+}
+Add-Click $ui.BtnW32Test { Start-Win32Lab '' }
+Add-Click $ui.BtnW32TestUpdate {
+    $dlg = New-Object Microsoft.Win32.OpenFileDialog
+    $dlg.Title = 'Previous build to install first (its intune-app.json or .intunewin)'
+    $dlg.Filter = 'Win32 build (intune-app.json;*.intunewin)|intune-app.json;*.intunewin'
+    $dlg.InitialDirectory = (Get-MsixWorkspace).Win32Output
+    if ($dlg.ShowDialog($window)) { Start-Win32Lab (Split-Path $dlg.FileName -Parent) }
+}
+Add-Click $ui.BtnW32Build {
+    $p = Save-Win32Form
+    if (-not $p.LastTest -or $p.LastTest.result -ne 'Passed') {
+        $answer = [System.Windows.MessageBox]::Show($window, "$($p.DisplayName) has no passed test in the Win32 Test Lab. Build anyway?", 'Build .intunewin', 'YesNo', 'Warning')
+        if ($answer -ne 'Yes') { return }
+    }
+    Start-UiTask -Title "Building $($p.DisplayName) $($p.Version).intunewin" -Arguments @{ Id = $p.Id } -Work { param($Id) New-Win32AppPackage -Id $Id } -OnDone {
+        param($result, $err)
+        if ($err -or -not $result) { return }
+        Show-Page 'Win32Builds'
+        Select-Win32Build $result[-1].BuildPath
+    }
+}
+
+# ---------------------------------------------------------------- Win32 builds + publish wizard
+function Update-Win32BuildList {
+    $selected = if ($ui.Win32BuildList.SelectedItem) { $ui.Win32BuildList.SelectedItem.Tag.Path } else { $null }
+    $ui.Win32BuildList.Items.Clear()
+    foreach ($b in Get-Win32AppBuild) {
+        $item = New-Object System.Windows.Controls.ListBoxItem
+        $published = [bool]$b.Definition.published
+        $badge = if ($published) { 'PUBLISHED' } elseif ($b.Tested -eq 'Passed') { 'TESTED' } elseif ($b.Tested) { 'TEST FAILED' } else { 'NOT TESTED' }
+        $color = if ($published -or $b.Tested -eq 'Passed') { 'green' } elseif ($b.Tested) { 'yellow' } else { 'blue' }
+        $item.Content = New-ListItemContent $b.DisplayName "$($b.Version)  $Dot  $($b.Built.ToString('g'))" $badge $color
+        $item.Tag = $b
+        [void]$ui.Win32BuildList.Items.Add($item)
+        if ($b.Path -eq $selected) { $item.IsSelected = $true }
+    }
+    Update-Win32BuildView
+}
+
+function Select-Win32Build([string]$Path) {
+    Update-Win32BuildList
+    foreach ($item in $ui.Win32BuildList.Items) { if ($item.Tag.Path -eq $Path) { $item.IsSelected = $true } }
+}
+
+function Update-Win32BuildView {
+    $b = if ($ui.Win32BuildList.SelectedItem) { $ui.Win32BuildList.SelectedItem.Tag } else { $null }
+    foreach ($n in 'BtnW32Publish', 'BtnW32BuildParams', 'BtnW32BuildOpen') { $ui[$n].IsEnabled = [bool]$b -and -not ($n -eq 'BtnW32Publish' -and $script:Task) }
+    $ui.BtnW32BuildDoc.IsEnabled = [bool]($b -and $b.Documentation)
+    if (-not $b) { $ui.W32BuildTitle.Text = 'Select a build'; $ui.W32BuildDetails.Text = ''; return }
+    $d = $b.Definition
+    $ui.W32BuildTitle.Text = "$($d.displayName) $($d.displayVersion)"
+    $pub = if ($d.published) { "$($d.published.appId) ($(([datetime]$d.published.date).ToString('g')))" + $(if ($d.published.supersedes) { ", supersedes $($d.published.supersedes) ($($d.published.supersedenceType))" }) } else { 'not yet' }
+    $ui.W32BuildDetails.Text = (@(
+        "Package     $($d.fileName)"
+        "Install     $($d.installCommandLine)"
+        "Uninstall   $($d.uninstallCommandLine)"
+        "Detection   $((& (Get-Module MsixSandboxStudio) { param($x) Format-Win32Detection $x } $d.detection))"
+        "Run as      $($d.runAsAccount), restart $($d.deviceRestartBehavior), $($d.applicableArchitectures), Windows $($d.minimumSupportedWindowsRelease)+"
+        "Test        $(if ($d.test) { "$($d.test.result) ($($d.test.scenario))" } else { 'not tested' })"
+        "Published   $pub"
+        "Folder      $($b.Path)"
+    ) -join "`n")
+}
+
+$ui.Win32BuildList.Add_SelectionChanged({ Update-Win32BuildView })
+Add-Click $ui.BtnW32BuildsRefresh { Update-Win32BuildList }
+Add-Click $ui.BtnW32BuildsFolder { Start-Process explorer.exe (Get-MsixWorkspace).Win32Output }
+Add-Click $ui.BtnW32BuildDoc { Start-Process $ui.Win32BuildList.SelectedItem.Tag.Documentation }
+Add-Click $ui.BtnW32BuildParams { Start-Process notepad.exe -ArgumentList "`"$($ui.Win32BuildList.SelectedItem.Tag.Parameters)`"" }
+Add-Click $ui.BtnW32BuildOpen { Start-Process explorer.exe $ui.Win32BuildList.SelectedItem.Tag.Path }
+
+function Show-PublishWizard($Build) {
+    # Collects app details, the app to supersede and the assignment; returns the choices or $null.
+    [xml]$x = Get-Content (Join-Path $PSScriptRoot 'UI\PublishWin32Window.xaml') -Raw -Encoding UTF8
+    $dlg = [Windows.Markup.XamlReader]::Load([System.Xml.XmlNodeReader]::new($x))
+    $dlg.Owner = $window
+    $w = @{}
+    foreach ($node in $x.SelectNodes("//*[@*[local-name()='Name']]")) {
+        $n = ($node.Attributes | Where-Object LocalName -eq 'Name').Value
+        $w[$n] = $dlg.FindName($n)
+    }
+    $d = $Build.Definition
+    $w.WizSubtitle.Text = "$($d.displayName) $($d.displayVersion)  $Dot  $($d.fileName)"
+    $w.WizName.Text = $d.displayName; $w.WizPublisher.Text = $d.publisher; $w.WizDescription.Text = $d.description
+    $w.WizTestText.Text = if ($d.test -and $d.test.result -eq 'Passed') { "Tested in the Win32 Test Lab: passed ($($d.test.scenario), $(([datetime]$d.test.date).ToString('g')))." } else { 'Warning: this build has no passed test in the Win32 Test Lab.' }
+    $w.WizTestBox.Background = if ($d.test -and $d.test.result -eq 'Passed') { ConvertTo-Brush '#DCFCE7' } else { ConvertTo-Brush '#FEF3C7' }
+    $state = @{ Page = 1; Supersede = $null; Group = $null; Result = $null }
+
+    $showPage = {
+        foreach ($i in 1..4) {
+            $w["WizPage$i"].Visibility = if ($i -eq $state.Page) { 'Visible' } else { 'Collapsed' }
+            $w["WizDot$i"].Background = if ($i -le $state.Page) { Get-Brush 'Primary' } else { ConvertTo-Brush '#E2E8F0' }
+            ($w["WizDot$i"].Child).Foreground = if ($i -le $state.Page) { [System.Windows.Media.Brushes]::White } else { ConvertTo-Brush '#475569' }
+        }
+        $w.WizBack.IsEnabled = $state.Page -gt 1
+        $w.WizNext.Visibility = if ($state.Page -lt 4) { 'Visible' } else { 'Collapsed' }
+        $w.WizPublish.Visibility = if ($state.Page -eq 4) { 'Visible' } else { 'Collapsed' }
+        if ($state.Page -eq 4) {
+            $sup = if ($state.Supersede) { "$($state.Supersede.DisplayName) $($state.Supersede.Version) ($(if ($w.WizTypeReplace.IsChecked) { 'replace: uninstall old first' } else { 'update: install over it' }))" } else { 'none' }
+            $grp = if ($state.Group) { "$($state.Group.DisplayName) ($(if ($w.WizIntentAvailable.IsChecked) { 'available' } else { 'required' }))" } else { 'none (upload only)' }
+            $w.WizSummary.Text = (@(
+                "App          $($w.WizName.Text) $($d.displayVersion)"
+                "Publisher    $($w.WizPublisher.Text)"
+                "Package      $($d.fileName)"
+                "Install      $($d.installCommandLine)"
+                "Uninstall    $($d.uninstallCommandLine)"
+                "Supersedes   $sup"
+                "Assignment   $grp"
+                "Tenant       $((Get-MsixIntuneContext).TenantId)"
+            ) -join "`n")
+        }
+    }
+    $w.WizNext.Add_Click({
+        if ($state.Page -eq 1 -and -not $w.WizName.Text.Trim()) { [void][System.Windows.MessageBox]::Show($dlg, 'Display name is required.'); return }
+        $state.Page++; & $showPage
+    })
+    $w.WizBack.Add_Click({ $state.Page--; & $showPage })
+    $w.WizCancel.Add_Click({ $dlg.Close() })
+    $w.WizSearchApps.Add_Click({
+        try {
+            $w.WizAppList.Items.Clear()
+            foreach ($a in Find-IntuneWin32App -Search $w.WizAppSearch.Text.Trim()) {
+                $item = New-Object System.Windows.Controls.ListBoxItem
+                $item.Content = New-ListItemContent $a.DisplayName "$($a.Version)  $Dot  $($a.Publisher)" ''
+                $item.Tag = $a
+                [void]$w.WizAppList.Items.Add($item)
+            }
+            if (-not $w.WizAppList.Items.Count) { [void][System.Windows.MessageBox]::Show($dlg, 'No Win32 app found.') }
+        }
+        catch { [void][System.Windows.MessageBox]::Show($dlg, $_.Exception.Message, 'Search', 'OK', 'Error') }
+    })
+    $w.WizAppList.Add_SelectionChanged({
+        if ($w.WizAppList.SelectedItem) { $state.Supersede = $w.WizAppList.SelectedItem.Tag; $w.WizSupersedeText.Text = "$($state.Supersede.DisplayName) $($state.Supersede.Version)" }
+    })
+    $w.WizSupersedeClear.Add_Click({ $state.Supersede = $null; $w.WizSupersedeText.Text = 'none'; $w.WizAppList.SelectedItem = $null })
+    $w.WizSearchGroups.Add_Click({
+        try {
+            if (-not $w.WizGroupSearch.Text.Trim()) { [void][System.Windows.MessageBox]::Show($dlg, 'Enter the beginning of a group name.'); return }
+            $w.WizGroupList.Items.Clear()
+            foreach ($g in Find-MsixIntuneGroup -Search $w.WizGroupSearch.Text.Trim()) {
+                $item = New-Object System.Windows.Controls.ListBoxItem
+                $item.Content = New-ListItemContent $g.DisplayName $g.Id ''
+                $item.Tag = $g
+                [void]$w.WizGroupList.Items.Add($item)
+            }
+        }
+        catch { [void][System.Windows.MessageBox]::Show($dlg, $_.Exception.Message, 'Search', 'OK', 'Error') }
+    })
+    $w.WizGroupList.Add_SelectionChanged({
+        if ($w.WizGroupList.SelectedItem) { $state.Group = $w.WizGroupList.SelectedItem.Tag; $w.WizGroupText.Text = $state.Group.DisplayName }
+    })
+    $w.WizGroupClear.Add_Click({ $state.Group = $null; $w.WizGroupText.Text = 'none'; $w.WizGroupList.SelectedItem = $null })
+    $w.WizPublish.Add_Click({
+        $state.Result = @{
+            BuildPath        = $Build.Path
+            DisplayName      = $w.WizName.Text.Trim()
+            Publisher        = $w.WizPublisher.Text.Trim()
+            Description      = $w.WizDescription.Text.Trim()
+            SupersedeAppId   = $(if ($state.Supersede) { $state.Supersede.Id } else { '' })
+            SupersedenceType = $(if ($w.WizTypeReplace.IsChecked) { 'replace' } else { 'update' })
+            GroupId          = $(if ($state.Group) { $state.Group.Id } else { '' })
+            Intent           = $(if ($w.WizIntentAvailable.IsChecked) { 'available' } else { 'required' })
+        }
+        $dlg.Close()
+    })
+    & $showPage
+    [void]$dlg.ShowDialog()
+    $state.Result
+}
+
+Add-Click $ui.BtnW32Publish {
+    $b = $ui.Win32BuildList.SelectedItem.Tag
+    if (-not (Get-MsixIntuneContext)) { Connect-Intune }
+    if (-not (Get-MsixIntuneContext)) { return }
+    $choice = Show-PublishWizard $b
+    if (-not $choice) { return }
+    Start-UiTask -Title "Publishing $($choice.DisplayName) $($b.Version) to Intune" -NeedsGraph -Arguments @{ C = $choice } -Work {
+        param($C) Publish-Win32AppToIntune @C
+    } -OnDone {
+        param($result, $err)
+        Update-Win32BuildList
+        if (-not $err -and $result) { [void][System.Windows.MessageBox]::Show($window, "Published: $($result[-1].DisplayName) $($result[-1].Version)`nIntune app ID: $($result[-1].AppId)", 'Publish to Intune', 'OK', 'Information') }
+    }
+}
+
 # ---------------------------------------------------------------- certificate
 function Update-CertificateView {
     $c = Get-MsixCertificate
@@ -927,6 +1375,14 @@ $window.Add_Closed({ $timer.Stop(); [System.Windows.Application]::Current.Shutdo
 Write-UiLog "MSIX Sandbox Studio $script:Version started. Workspace: $((Get-MsixWorkspace).Root)"
 Show-Page 'Dashboard'
 Clear-RecipeForm
+Clear-Win32Form
+$startSettings = Get-MsixSettings
+Set-AppMode $(if ($startSettings.Mode) { $startSettings.Mode } else { 'MSIX' })
+# Start question "MSIX or Win32?" once the window is visible (not in the off-screen test mode)
+if (-not $env:MSIXSTUDIO_SMOKE -and ($startSettings.AskModeOnStart -or -not $startSettings.Mode)) {
+    $script:ModeAsked = $false
+    $window.Add_ContentRendered({ if (-not $script:ModeAsked) { $script:ModeAsked = $true; Show-ModeDialog } })
+}
 $timer.Start()
 # Test hook: MSIXSTUDIO_SMOKE names a script that drives the window off-screen and renders every page.
 if ($env:MSIXSTUDIO_SMOKE) { . $env:MSIXSTUDIO_SMOKE }

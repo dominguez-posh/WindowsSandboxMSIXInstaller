@@ -251,6 +251,97 @@ Describe 'Update and documentation' {
     }
 }
 
+Describe 'Win32 apps' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '..\MsixSandboxStudio\Sandbox\Win32Shared.ps1')
+        $script:W32 = Save-Win32AppProject -DisplayName 'Contoso Tool' -Publisher 'Contoso' -Version '2.4.1' -InstallerPath "$env:SystemRoot\System32\whoami.exe" -InstallArguments '/S' -WithUpdateScript
+    }
+    It 'creates a project with all four scripts that parse' {
+        foreach ($name in 'Install.ps1', 'Uninstall.ps1', 'Detect.ps1', 'Update.ps1') {
+            $file = Join-Path $script:W32.SourcePath $name
+            Test-Path $file | Should -BeTrue
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$null, [ref]$errors) | Out-Null
+            $errors.Count | Should -Be 0 -Because "$name must be valid PowerShell"
+        }
+        $script:W32.InstallerType | Should -Be 'EXE'
+        $script:W32.InstallCommand | Should -Match 'sysnative.*Install\.ps1'
+    }
+    It 'keeps edited scripts on save and regenerates on request' {
+        $p = Save-Win32AppProject -Id $script:W32.Id -DisplayName 'Contoso Tool' -Version '2.4.1' -Scripts @{ 'Install.ps1' = '# custom'; 'Update.ps1' = '' }
+        Get-Content (Join-Path $p.SourcePath 'Install.ps1') -Raw | Should -Match '# custom'
+        Test-Path (Join-Path $p.SourcePath 'Update.ps1') | Should -BeFalse
+        $p = Save-Win32AppProject -Id $script:W32.Id -DisplayName 'Contoso Tool' -Version '2.4.1' -RegenerateScripts
+        Get-Content (Join-Path $p.SourcePath 'Install.ps1') -Raw | Should -Match 'Start-Process -FilePath'
+    }
+    It 'reports "not installed" from the generated detection script' {
+        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:W32.SourcePath 'Detect.ps1')
+        $LASTEXITCODE | Should -Be 1
+        $out | Should -BeNullOrEmpty
+    }
+    It 'builds an .intunewin whose content decrypts back to the source' {
+        $b = New-Win32AppPackage -Id $script:W32.Id
+        $info = Get-IntuneWinInfo -Path $b.IntuneWin
+        $info.SetupFile | Should -Be 'Install.ps1'
+        $info.EncryptionInfo.profileIdentifier | Should -Be 'ProfileVersion1'
+        $x = Join-Path $script:TestRoot 'expanded'
+        Expand-IntuneWinPackage -Path $b.IntuneWin -Destination $x | Out-Null
+        foreach ($f in Get-ChildItem $script:W32.SourcePath -File) {
+            (Get-FileHash (Join-Path $x $f.Name)).Hash | Should -Be (Get-FileHash $f.FullName).Hash
+        }
+        $def = Get-Content $b.Parameters -Raw | ConvertFrom-Json
+        $def.detectionRule.'@odata.type' | Should -Be '#microsoft.graph.win32LobAppPowerShellScriptRule'
+        $def.returnCodes.returnCode | Should -Contain 3010
+        Test-Path $b.Documentation | Should -BeTrue
+        (Get-Win32AppBuild -Id $script:W32.Id).Version | Should -Contain '2.4.1'
+    }
+    It 'maps detection rules to Graph rules' -ForEach @(
+        @{ D = @{ Type = 'MsiProductCode'; ProductCode = '{A}'; ProductVersion = '1.2'; ProductVersionOperator = 'greaterThanOrEqual' }; T = '#microsoft.graph.win32LobAppProductCodeRule' }
+        @{ D = @{ Type = 'File'; Path = '%ProgramFiles%\C'; FileOrFolder = 'c.exe'; FileOperation = 'version'; FileOperator = 'greaterThanOrEqual'; FileVersion = '2.0' }; T = '#microsoft.graph.win32LobAppFileSystemRule' }
+        @{ D = @{ Type = 'Registry'; KeyPath = 'HKEY_LOCAL_MACHINE\SOFTWARE\C'; ValueName = 'V'; RegistryOperation = 'string'; RegistryOperator = 'equal'; RegistryValue = '1' }; T = '#microsoft.graph.win32LobAppRegistryRule' }
+    ) {
+        $rule = ConvertTo-IntuneWin32Rule -Project ([pscustomobject]@{ Detection = [pscustomobject]$D; SourcePath = $script:W32.SourcePath })
+        $rule.'@odata.type' | Should -Be $T
+        $rule.ruleType | Should -Be 'detection'
+    }
+    It 'runs a command line like the Intune Management Extension (cmd syntax, sysnative, working folder)' {
+        $wd = Join-Path $script:TestRoot 'lab content'
+        New-Item -ItemType Directory $wd -Force | Out-Null
+        'Write-Output "in $PWD"; exit 3010' | Set-Content (Join-Path $wd 'Install.ps1')
+        $h = Start-LabCommand -CommandLine '"%SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ".\Install.ps1"' -WorkingDirectory $wd -Root (Join-Path $script:TestRoot 'labruns')
+        $r = $null
+        for ($i = 0; $i -lt 60 -and -not $r; $i++) { Start-Sleep -Milliseconds 500; $r = Get-LabCommandResult $h }
+        $r.ExitCode | Should -Be 3010
+        $r.Output | Should -Match 'lab content'
+        Test-LabSuccessCode $r.ExitCode | Should -BeTrue
+        Test-LabSuccessCode 1603 | Should -BeFalse
+    }
+    It 'evaluates file, registry and MSI detection rules' {
+        (Test-LabDetection ([pscustomobject]@{ Type = 'File'; Path = '%SystemRoot%\System32'; FileOrFolder = 'notepad.exe'; FileOperation = 'exists' })).Detected | Should -BeTrue
+        (Test-LabDetection ([pscustomobject]@{ Type = 'File'; Path = '%SystemRoot%\System32'; FileOrFolder = 'notepad.exe'; FileOperation = 'version'; FileOperator = 'greaterThanOrEqual'; FileVersion = '999.0' })).Detected | Should -BeFalse
+        (Test-LabDetection ([pscustomobject]@{ Type = 'Registry'; KeyPath = 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; ValueName = 'ProductName'; RegistryOperation = 'exists' })).Detected | Should -BeTrue
+        (Test-LabDetection ([pscustomobject]@{ Type = 'MsiProductCode'; ProductCode = '{00000000-0000-0000-0000-000000000000}' })).Detected | Should -BeFalse
+    }
+    It 'documents a test lab session' {
+        $job = Join-Path $script:TestRoot 'lab-job'
+        New-Item -ItemType Directory "$job\out\lab\shots" -Force | Out-Null
+        'png' | Set-Content "$job\out\lab\shots\step-1.png"
+        @{ Scenario = 'New installation'; AsSystem = $true; Verdict = 'Passed'; Notes = 'ok'
+           Steps = @(@{ Index = 1; Kind = 'Install'; Title = 'Install 2.4.1'; Expect = 'Exit code is a success code'; State = 'Passed'; ExitCode = 0; Detail = 'Exit code 0'; Output = 'done'; Seconds = 3; Screenshot = 'shots/step-1.png' }) } |
+            ConvertTo-Json -Depth 5 | Set-Content "$job\out\lab\results.json"
+        $file = Join-Path $script:W32.ProjectPath 'project.json'
+        $json = Get-Content $file -Raw | ConvertFrom-Json
+        $json | Add-Member -NotePropertyName LastTest -NotePropertyValue ([pscustomobject]@{ result = 'Passed'; date = (Get-Date).ToString('o'); scenario = 'new installation'; message = 'ok'; notes = 'Looks good'; job = $job; changed = @() }) -Force
+        $json | ConvertTo-Json -Depth 8 | Set-Content $file
+        $b = New-Win32AppPackage -Id $script:W32.Id
+        $html = Get-Content $b.Documentation -Raw
+        $html | Should -Match 'tested in the Win32 Test Lab: passed'
+        $html | Should -Match 'Install 2\.4\.1'
+        $html | Should -Match 'Looks good'
+        Test-Path (Join-Path (Split-Path $b.Documentation) 'lab-step-1.png') | Should -BeTrue
+    }
+}
+
 Describe 'Intune content encryption' {
     It 'produces HMAC + IV + ciphertext that decrypts to the original' {
         $src = Join-Path $script:TestRoot 'plain.bin'

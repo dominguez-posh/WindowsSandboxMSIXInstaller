@@ -33,6 +33,7 @@
                     </StackPanel>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="BtnMode" Tag="&#xE8AB;" Content="MSIX" Style="{StaticResource HeaderButton}" ToolTip="Switch between MSIX packages and Win32 apps (.intunewin)"/>
                     <Button x:Name="BtnHelp" Tag="&#xE897;" Content="Help" Style="{StaticResource HeaderButton}"/>
                     <Button x:Name="BtnHeaderSettings" Tag="&#xE713;" Content="Settings" Style="{StaticResource HeaderButton}"/>
                     <Button x:Name="BtnIntuneSignIn" Tag="&#xE77B;" Content="Sign in"/>
@@ -49,6 +50,8 @@
                     <RadioButton x:Name="NavRecipes" Style="{StaticResource NavTab}" Tag="&#xE8FD;" Content="Recipes"/>
                     <RadioButton x:Name="NavPackages" Style="{StaticResource NavTab}" Tag="&#xE7B8;" Content="Packages"/>
                     <RadioButton x:Name="NavCertificate" Style="{StaticResource NavTab}" Tag="&#xEB95;" Content="Certificate"/>
+                    <RadioButton x:Name="NavWin32Apps" Style="{StaticResource NavTab}" Tag="&#xE943;" Content="Win32 apps"/>
+                    <RadioButton x:Name="NavWin32Builds" Style="{StaticResource NavTab}" Tag="&#xE7B8;" Content="Win32 builds"/>
                     <RadioButton x:Name="NavIntune" Style="{StaticResource NavTab}" Tag="&#xE753;" Content="Intune"/>
                     <RadioButton x:Name="NavSettings" Style="{StaticResource NavTab}" Tag="&#xE713;" Content="Settings"/>
                 </StackPanel>
@@ -74,7 +77,49 @@
                             <ColumnDefinition Width="18"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <GroupBox Header="Get started">
+                        <!-- Win32 mode -->
+                        <GroupBox x:Name="GrpStartWin32" Header="Get started: Win32 app (.intunewin)" Visibility="Collapsed">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <Border Style="{StaticResource StepDot}"><TextBlock Text="1" Style="{StaticResource StepNumber}"/></Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="Design" Style="{StaticResource StepTitle}"/>
+                                        <TextBlock Text="New Win32 app: choose the installer. Install, uninstall, detection and update scripts are generated and can be edited; detection by script, MSI product code, file or registry." Style="{StaticResource StepText}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <Border Style="{StaticResource StepDot}"><TextBlock Text="2" Style="{StaticResource StepNumber}"/></Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="Test in the sandbox" Style="{StaticResource StepTitle}"/>
+                                        <TextBlock Text="The Win32 Test Lab runs Install, Detect, Uninstall with one click each, as SYSTEM like Intune. For an update, the previous version is installed first. Fix scripts right there, then report success or failure." Style="{StaticResource StepText}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <Border Style="{StaticResource StepDot}"><TextBlock Text="3" Style="{StaticResource StepNumber}"/></Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="Build and document" Style="{StaticResource StepTitle}"/>
+                                        <TextBlock Text="Creates the .intunewin, the parameter file intune-app.json with all Intune settings and the HTML documentation with the test protocol." Style="{StaticResource StepText}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid Margin="0,0,0,16">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <Border Style="{StaticResource StepDot}"><TextBlock Text="4" Style="{StaticResource StepNumber}"/></Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="Publish" Style="{StaticResource StepTitle}"/>
+                                        <TextBlock Text="The publish wizard uploads the app to Intune, sets the app it supersedes (previous version) and the assignment." Style="{StaticResource StepText}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <WrapPanel>
+                                    <Button x:Name="BtnDashWin32New" Tag="&#xE710;" Content="New Win32 app"/>
+                                    <Button x:Name="BtnDashWin32Builds" Tag="&#xE7B8;" Content="Builds" Style="{StaticResource SecondaryButton}"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </GroupBox>
+                        <!-- MSIX mode -->
+                        <GroupBox x:Name="GrpStartMsix" Header="Get started: MSIX package">
                             <StackPanel>
                                 <Grid Margin="0,0,0,12">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
@@ -116,10 +161,10 @@
                             </StackPanel>
                         </GroupBox>
                         <StackPanel Grid.Column="2">
-                            <GroupBox Header="Recipes">
+                            <GroupBox x:Name="GrpStat1" Header="Recipes">
                                 <TextBlock x:Name="StatRecipes" Text="0" FontSize="30" FontWeight="SemiBold" Foreground="{StaticResource Primary}"/>
                             </GroupBox>
-                            <GroupBox Header="Packages in output">
+                            <GroupBox x:Name="GrpStat2" Header="Packages in output">
                                 <TextBlock x:Name="StatPackages" Text="0" FontSize="30" FontWeight="SemiBold" Foreground="{StaticResource Success}"/>
                             </GroupBox>
                         </StackPanel>
@@ -281,6 +326,206 @@
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- ===== Win32 apps (designer) ===== -->
+            <Grid x:Name="PageWin32Apps" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="300"/>
+                    <ColumnDefinition Width="18"/>
+                    <ColumnDefinition/>
+                </Grid.ColumnDefinitions>
+                <GroupBox Header="Win32 apps">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button x:Name="BtnW32New" Tag="&#xE710;" Content="New" Margin="0,0,4,0"/>
+                            <Button x:Name="BtnW32Refresh" Tag="&#xE72C;" Content="Refresh" Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+                        <ListBox x:Name="Win32AppList" Style="{StaticResource MethodList}"/>
+                    </DockPanel>
+                </GroupBox>
+                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <GroupBox>
+                            <GroupBox.Header><TextBlock x:Name="W32Title" Text="New Win32 app"/></GroupBox.Header>
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Display name" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32Name"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Publisher" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32Publisher"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Version" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32Version"/>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="Description" Style="{StaticResource Label}" Margin="0,10,0,4"/>
+                                <TextBox x:Name="TxtW32Description"/>
+                                <TextBlock Text="Installer (.msi / .exe; optional for script-only apps)" Style="{StaticResource Label}" Margin="0,10,0,4"/>
+                                <DockPanel>
+                                    <Button x:Name="BtnW32Browse" DockPanel.Dock="Right" Tag="&#xE838;" Content="Browse" Style="{StaticResource SecondaryButton}"/>
+                                    <TextBox x:Name="TxtW32Installer" Margin="0,4"/>
+                                </DockPanel>
+                                <Grid Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Silent arguments (EXE)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32Args" FontFamily="Consolas"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Name in Programs and Features (for detection and uninstall)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32DetectName"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="Scripts">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button x:Name="BtnW32Generate" Tag="&#xE945;" Content="Generate from templates" Style="{StaticResource SecondaryButton}" Margin="0,0,10,0"/>
+                                    <CheckBox x:Name="ChkW32Update" Content="Include update routine (Update.ps1, runs at the start of the installation)"/>
+                                </StackPanel>
+                                <TabControl x:Name="W32ScriptTabs" Height="300">
+                                    <TabItem Header="Install.ps1"><TextBox x:Name="TxtW32Install" AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" VerticalContentAlignment="Top" Padding="6"/></TabItem>
+                                    <TabItem Header="Detect.ps1"><TextBox x:Name="TxtW32Detect" AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" VerticalContentAlignment="Top" Padding="6"/></TabItem>
+                                    <TabItem Header="Uninstall.ps1"><TextBox x:Name="TxtW32Uninstall" AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" VerticalContentAlignment="Top" Padding="6"/></TabItem>
+                                    <TabItem Header="Update.ps1"><TextBox x:Name="TxtW32UpdateScript" AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" VerticalContentAlignment="Top" Padding="6"/></TabItem>
+                                </TabControl>
+                                <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                           Text="Install command: powershell (64-bit via sysnative) -File .\Install.ps1, uninstall the same with Uninstall.ps1. Logs go to the Intune Management Extension log folder."/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="Detection rule">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="W32DetScript" GroupName="W32Det" Content="Script (Detect.ps1)" IsChecked="True"/>
+                                    <RadioButton x:Name="W32DetMsi" GroupName="W32Det" Content="MSI product code"/>
+                                    <RadioButton x:Name="W32DetFile" GroupName="W32Det" Content="File or folder"/>
+                                    <RadioButton x:Name="W32DetReg" GroupName="W32Det" Content="Registry"/>
+                                </StackPanel>
+                                <Grid x:Name="W32DetMsiPanel" Margin="0,10,0,0" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Product code" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32ProductCode" FontFamily="Consolas"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Minimum version (optional)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32ProductVersion"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid x:Name="W32DetFilePanel" Margin="0,10,0,0" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Folder (e.g. %ProgramFiles%\Contoso)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32FilePath"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="File or folder name" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32FileName"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Minimum file version (optional)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32FileVersion"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid x:Name="W32DetRegPanel" Margin="0,10,0,0" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Key (e.g. HKEY_LOCAL_MACHINE\SOFTWARE\Contoso)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32RegKey"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Value name (optional)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32RegValue"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Equals (optional; empty = exists)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtW32RegData"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="Intune settings">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Install behavior" Style="{StaticResource Label}"/>
+                                    <ComboBox x:Name="CmbW32RunAs" SelectedIndex="0"><ComboBoxItem Content="system"/><ComboBoxItem Content="user"/></ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Device restart" Style="{StaticResource Label}"/>
+                                    <ComboBox x:Name="CmbW32Restart" SelectedIndex="0"><ComboBoxItem Content="basedOnReturnCode"/><ComboBoxItem Content="suppress"/><ComboBoxItem Content="allow"/><ComboBoxItem Content="force"/></ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="Architecture" Style="{StaticResource Label}"/>
+                                    <ComboBox x:Name="CmbW32Arch" SelectedIndex="0"><ComboBoxItem Content="x64,x86"/><ComboBoxItem Content="x64"/><ComboBoxItem Content="x86"/></ComboBox>
+                                </StackPanel>
+                                <StackPanel Grid.Column="6">
+                                    <TextBlock Text="Minimum Windows" Style="{StaticResource Label}"/>
+                                    <ComboBox x:Name="CmbW32MinOS" SelectedIndex="0"><ComboBoxItem Content="1607"/><ComboBoxItem Content="1809"/><ComboBoxItem Content="2004"/><ComboBoxItem Content="21H2"/><ComboBoxItem Content="22H2"/></ComboBox>
+                                </StackPanel>
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="Test and build">
+                            <StackPanel>
+                                <Border x:Name="W32LastTestBox" Style="{StaticResource InfoBox}" Margin="0,0,0,10">
+                                    <TextBlock x:Name="TxtW32LastTest" TextWrapping="Wrap" FontSize="12" Text="Not tested yet."/>
+                                </Border>
+                                <WrapPanel>
+                                    <Button x:Name="BtnW32Save" Tag="&#xE74E;" Content="Save" Style="{StaticResource SecondaryButton}" Margin="0,0,4,4"/>
+                                    <Button x:Name="BtnW32Test" Tag="&#xEBE8;" Content="Test in sandbox" Style="{StaticResource SuccessButton}" Margin="4,0,4,4"
+                                            ToolTip="Win32 Test Lab: Install, Detect, Uninstall with one click each"/>
+                                    <Button x:Name="BtnW32TestUpdate" Tag="&#xE777;" Content="Test update from previous build ..." Style="{StaticResource SuccessButton}" Margin="4,0,4,4"
+                                            ToolTip="Installs a previous build first, then the update"/>
+                                    <Button x:Name="BtnW32Build" Tag="&#xE7B8;" Content="Build .intunewin" Margin="4,0,4,4"/>
+                                    <Button x:Name="BtnW32Delete" Tag="&#xE74D;" Content="Delete" Style="{StaticResource DangerButton}" Margin="4,0,4,4"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- ===== Win32 builds ===== -->
+            <Grid x:Name="PageWin32Builds" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="360"/>
+                    <ColumnDefinition Width="18"/>
+                    <ColumnDefinition/>
+                </Grid.ColumnDefinitions>
+                <GroupBox Header="Built packages (.intunewin)">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button x:Name="BtnW32BuildsRefresh" Tag="&#xE72C;" Content="Refresh" Style="{StaticResource SecondaryButton}" Margin="0,0,4,0"/>
+                            <Button x:Name="BtnW32BuildsFolder" Tag="&#xE838;" Content="Folder" Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+                        <ListBox x:Name="Win32BuildList" Style="{StaticResource MethodList}"/>
+                    </DockPanel>
+                </GroupBox>
+                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                    <GroupBox>
+                        <GroupBox.Header><TextBlock x:Name="W32BuildTitle" Text="Select a build"/></GroupBox.Header>
+                        <StackPanel>
+                            <TextBox x:Name="W32BuildDetails" Style="{StaticResource SelectableText}" FontFamily="Consolas" FontSize="12"/>
+                            <WrapPanel Margin="0,14,0,0">
+                                <Button x:Name="BtnW32Publish" Tag="&#xE898;" Content="Publish to Intune ..." Margin="0,0,4,4" IsEnabled="False"/>
+                                <Button x:Name="BtnW32BuildDoc" Tag="&#xE8A5;" Content="Documentation" Style="{StaticResource SecondaryButton}" Margin="4,0,4,4" IsEnabled="False"/>
+                                <Button x:Name="BtnW32BuildParams" Tag="&#xE943;" Content="Parameter file" Style="{StaticResource SecondaryButton}" Margin="4,0,4,4" IsEnabled="False"/>
+                                <Button x:Name="BtnW32BuildOpen" Tag="&#xE838;" Content="Open folder" Style="{StaticResource SecondaryButton}" Margin="4,0,4,4" IsEnabled="False"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </GroupBox>
                 </ScrollViewer>
             </Grid>
 

@@ -1,9 +1,9 @@
 @{
     RootModule        = 'MsixSandboxStudio.psm1'
-    ModuleVersion     = '2.1.0'
+    ModuleVersion     = '2.2.0'
     GUID              = '5d0f4f3e-8a51-4d55-9b0e-2f6c1b7a9e41'
     Author            = 'Lucas Dominguez'
-    Description       = 'Repackage installers to MSIX in disposable Windows Sandboxes, sign on the host, test in a clean sandbox and publish to Intune.'
+    Description       = 'MSIX packages and Win32 apps (.intunewin) for Intune: repackage, record, test and document in disposable Windows Sandboxes, publish to Intune.'
     PowerShellVersion = '5.1'
     FunctionsToExport = @(
         # Host and settings
@@ -22,6 +22,10 @@
         'New-MsixDocumentation', 'Get-MsixDocumentation', 'Get-MsixPackageContent'
         # Intune
         'Connect-MsixIntune', 'Disconnect-MsixIntune', 'Get-MsixIntuneContext', 'Publish-MsixToIntune', 'Set-MsixIntuneAssignment', 'Find-MsixIntuneGroup', 'Publish-MsixCertificateToIntune', 'Get-MsixPublisherHash'
+        # Win32 apps (.intunewin)
+        'Get-Win32AppProject', 'Save-Win32AppProject', 'Remove-Win32AppProject', 'Get-Win32AppScript', 'Get-Win32ScriptTemplate', 'New-Win32Detection'
+        'New-IntuneWinPackage', 'Get-IntuneWinInfo', 'Expand-IntuneWinPackage', 'New-Win32AppPackage', 'Get-Win32AppBuild', 'ConvertTo-IntuneWin32Rule'
+        'Start-Win32TestLab', 'New-Win32AppDocumentation', 'Publish-Win32AppToIntune', 'Find-IntuneWin32App'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

@@ -192,29 +192,7 @@ function clickTimeline(e){const r=tl.getBoundingClientRect();seek((e.clientX-r.l
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>$(& $h $pkg.DisplayName) $(& $h $pkg.Version) - package documentation</title>
 <style>
-:root{--bg:#F3F5F8;--header:#0F172A;--card:#fff;--line:#E1E5EA;--text:#242424;--muted:#64748B;--primary:#0067B8;--ok:#107C41;--bad:#C42B1C}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI",system-ui,sans-serif}
-header{background:var(--header);color:#fff;padding:22px 32px}header h1{margin:0;font-size:24px;font-weight:600}
-header .sub{color:#94A3B8;font-size:13px}header .meta{color:#CBD5E1;font-size:12px;margin-top:6px}
-main{max-width:1180px;margin:0 auto;padding:24px 16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:18px 22px;margin-bottom:16px}
-h2{font-size:15px;margin:0 0 12px;font-weight:600}table{border-collapse:collapse;width:100%}
-.summary th{text-align:left;color:var(--muted);font-weight:600;width:210px;vertical-align:top;padding:6px 12px 6px 0}
-.summary td{padding:6px 0;border-bottom:1px solid #EEF1F4}code,.mono{font-family:Consolas,monospace;font-size:12.5px}
-.muted{color:var(--muted);font-size:12.5px}.ok{color:var(--ok)}.bad{color:var(--bad)}
-.chip{display:inline-block;background:#E0ECF8;color:#0F3D66;border-radius:10px;padding:1px 9px;font-size:12px;margin:2px 2px 2px 0}
-.step{border-top:1px solid #EEF1F4;padding:14px 0}.step:first-of-type{border-top:0}
-.step-head{display:flex;gap:12px;align-items:flex-start;margin-bottom:8px}
-.num{flex:none;width:28px;height:28px;border-radius:14px;background:var(--bad);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center}
-.step img,.shots img{max-width:100%;border:1px solid var(--line);border-radius:4px}.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
-.player{max-width:960px;margin:0 auto}.player img{width:100%;border:1px solid var(--line);border-radius:4px;background:#000}
-.controls{display:flex;gap:10px;align-items:center;margin-top:8px}.controls button,.controls select{font:inherit;padding:6px 14px;border:0;border-radius:4px;background:var(--primary);color:#fff;cursor:pointer}
-.controls select{background:#64748B}.timeline{flex:1;height:10px;background:#E2E8F0;border-radius:5px;position:relative;cursor:pointer}
-.bar{height:100%;background:var(--primary);border-radius:5px;width:0}.mark{position:absolute;top:-3px;width:4px;height:16px;background:var(--bad);border-radius:2px;cursor:pointer}
-details{margin:6px 0}summary{cursor:pointer;padding:4px 0}.files td{padding:2px 8px;border-bottom:1px solid #F1F5F9;font-family:Consolas,monospace;font-size:12px}
-.files td.num{text-align:right;color:var(--muted);width:120px}pre{background:#0F172A;color:#E2E8F0;padding:12px;border-radius:4px;overflow:auto;font-size:12px}
-ol.plain{margin:0;padding-left:20px}footer{text-align:center;color:var(--muted);font-size:12px;padding:10px 0 30px}
-@media print{.controls,#player{display:none}header{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+$(Get-MsixReportStyle)
 </style></head><body>
 <header><h1>$(& $h $pkg.DisplayName) $(& $h $pkg.Version)</h1><div class="sub">MSIX package documentation</div>
 <div class="meta">$(& $h $method) &middot; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm') by MSIX Sandbox Studio</div></header>
@@ -239,4 +217,36 @@ function Get-MsixDocumentation {
     param([Parameter(Mandatory)][string]$PackagePath)
     $index = Join-Path (Split-Path $PackagePath -Parent) ("{0}_documentation\index.html" -f [IO.Path]::GetFileNameWithoutExtension($PackagePath))
     if (Test-Path $index) { $index } else { $null }
+}
+
+function Get-MsixReportStyle {
+    # Shared CSS of the HTML reports (MSIX and Win32): look of the M365 MFA tool family.
+    @'
+:root{--bg:#F3F5F8;--header:#0F172A;--card:#fff;--line:#E1E5EA;--text:#242424;--muted:#64748B;--primary:#0067B8;--ok:#107C41;--bad:#C42B1C}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI",system-ui,sans-serif}
+header{background:var(--header);color:#fff;padding:22px 32px}header h1{margin:0;font-size:24px;font-weight:600}
+header .sub{color:#94A3B8;font-size:13px}header .meta{color:#CBD5E1;font-size:12px;margin-top:6px}
+main{max-width:1180px;margin:0 auto;padding:24px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:18px 22px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 12px;font-weight:600}table{border-collapse:collapse;width:100%}
+.summary th{text-align:left;color:var(--muted);font-weight:600;width:210px;vertical-align:top;padding:6px 12px 6px 0}
+.summary td{padding:6px 0;border-bottom:1px solid #EEF1F4}code,.mono{font-family:Consolas,monospace;font-size:12.5px}
+.muted{color:var(--muted);font-size:12.5px}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.chip{display:inline-block;background:#E0ECF8;color:#0F3D66;border-radius:10px;padding:1px 9px;font-size:12px;margin:2px 2px 2px 0}
+.step{border-top:1px solid #EEF1F4;padding:14px 0}.step:first-of-type{border-top:0}
+.step-head{display:flex;gap:12px;align-items:flex-start;margin-bottom:8px}
+.num{flex:none;width:28px;height:28px;border-radius:14px;background:var(--bad);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center}
+.step img,.shots img{max-width:100%;border:1px solid var(--line);border-radius:4px}.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
+.player{max-width:960px;margin:0 auto}.player img{width:100%;border:1px solid var(--line);border-radius:4px;background:#000}
+.controls{display:flex;gap:10px;align-items:center;margin-top:8px}.controls button,.controls select{font:inherit;padding:6px 14px;border:0;border-radius:4px;background:var(--primary);color:#fff;cursor:pointer}
+.controls select{background:#64748B}.timeline{flex:1;height:10px;background:#E2E8F0;border-radius:5px;position:relative;cursor:pointer}
+.bar{height:100%;background:var(--primary);border-radius:5px;width:0}.mark{position:absolute;top:-3px;width:4px;height:16px;background:var(--bad);border-radius:2px;cursor:pointer}
+details{margin:6px 0}summary{cursor:pointer;padding:4px 0}.files td{padding:2px 8px;border-bottom:1px solid #F1F5F9;font-family:Consolas,monospace;font-size:12px}
+.files td.num{text-align:right;color:var(--muted);width:120px}pre{background:#0F172A;color:#E2E8F0;padding:12px;border-radius:4px;overflow:auto;font-size:12px}
+ol.plain{margin:0;padding-left:20px}footer{text-align:center;color:var(--muted);font-size:12px;padding:10px 0 30px}
+@media print{.controls,#player{display:none}header{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+.result{display:inline-block;border-radius:10px;padding:2px 10px;font-size:12px;font-weight:600}
+.passed{background:#DCFCE7;color:#166534}.failed{background:#FEE2E2;color:#991B1B}.pending{background:#E2E8F0;color:#334155}
+.grid td,.grid th{text-align:left;padding:6px 10px;border-bottom:1px solid #EEF1F4;vertical-align:top}.grid th{color:var(--muted);font-size:12px}
+'@
 }

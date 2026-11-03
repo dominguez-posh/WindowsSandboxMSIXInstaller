@@ -93,7 +93,7 @@ $folders
 
 function New-MsixJob {
     # Creates a job folder with job.json; returns its path.
-    param([Parameter(Mandatory)][ValidateSet('Interactive', 'Package', 'Record', 'Test')][string]$Mode, [string]$Name = 'sandbox', [hashtable]$Data = @{})
+    param([Parameter(Mandatory)][ValidateSet('Interactive', 'Package', 'Record', 'Test', 'Win32Lab')][string]$Mode, [string]$Name = 'sandbox', [hashtable]$Data = @{})
     $id = '{0:yyyyMMdd-HHmmss}-{1}-{2}' -f (Get-Date), $Mode.ToLower(), ($Name -replace '[^\w\.-]', '_')
     $path = Join-Path (Get-MsixWorkspace).Jobs $id
     New-Item -ItemType Directory -Path (Join-Path $path 'input'), (Join-Path $path 'out') -Force | Out-Null

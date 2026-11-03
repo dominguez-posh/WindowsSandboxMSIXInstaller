@@ -5,6 +5,7 @@
 #   Record:      open the MSIX Recorder (Recorder.ps1), install the tool while it shows progress, then hand
 #                over: the user starts/stops the recording there and the recorder closes the sandbox
 #   Test:        trust the certificate, install the package, start each app, screenshot, uninstall, close
+#   Win32Lab:    open the Win32 Test Lab (Win32Lab.ps1) for an .intunewin's content; it closes the sandbox
 
 $ErrorActionPreference = 'Stop'
 $JobDir       = 'C:\MsixStudio\Job'
@@ -149,6 +150,15 @@ try {
             Set-JobStatus Running 'Ready'
         }
 
+        'Win32Lab' {
+            # The lab panel shows the progress and takes over once 'Ready'; no Packaging Tool needed.
+            Start-Process powershell.exe -ArgumentList '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "$PSScriptRoot\Win32Lab.ps1"
+            Set-JobStatus Running 'Copying the package content'
+            Copy-JobInput
+            Save-Logs
+            Set-JobStatus Running 'Ready'
+        }
+
         'Test' {
             Import-SigningCertificate
             Copy-JobInput
@@ -204,9 +214,9 @@ try {
 }
 catch {
     Set-JobStatus Failed 'Error' $_.Exception.Message
-    if ($job.Mode -eq 'Record') { Save-Logs }
+    if ($job.Mode -in 'Record', 'Win32Lab') { Save-Logs }
 }
 finally {
     # In Record mode the recorder owns the sandbox from 'Ready' on (no more writes here); it closes it itself.
-    if ($job.Mode -ne 'Record') { Close-Sandbox }
+    if ($job.Mode -notin 'Record', 'Win32Lab') { Close-Sandbox }
 }

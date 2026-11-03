@@ -35,6 +35,8 @@ function Get-MsixWorkspace {
         Jobs         = Join-Path $root 'Jobs'
         Output       = Join-Path $root 'Output'
         Shared       = Join-Path $root 'Shared'
+        Win32Apps    = Join-Path $root 'Win32Apps'
+        Win32Output  = Join-Path $root 'Output\Win32'
     }
     foreach ($dir in $ws.Values) {
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -61,6 +63,8 @@ function Get-MsixSettings {
         JobTimeoutMinutes    = 45
         KeyVaultName         = ''
         KeyVaultCertName     = ''
+        Mode                 = ''        # MSIX or Win32; empty = ask at start
+        AskModeOnStart       = $true
     }
     $path = Get-MsixSettingsPath
     if (Test-Path $path) {

@@ -1,0 +1,112 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Publish Win32 app to Intune" Width="760" Height="620" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="{StaticResource WindowBackground}" Foreground="{StaticResource Text}" FontFamily="Segoe UI">
+    <!-- Publish wizard: 1 app details, 2 app to supersede, 3 assignment, 4 summary -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Border Background="{StaticResource HeaderBackground}" Padding="24,14">
+            <StackPanel>
+                <TextBlock x:Name="WizTitle" Text="Publish to Intune" Foreground="White" FontSize="19" FontWeight="SemiBold"/>
+                <TextBlock x:Name="WizSubtitle" Foreground="#94A3B8" FontSize="12" Margin="0,3,0,0"/>
+            </StackPanel>
+        </Border>
+        <Border Grid.Row="1" Background="White" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1" Padding="20,10">
+            <StackPanel Orientation="Horizontal">
+                <Border x:Name="WizDot1" Style="{StaticResource StepDot}" Width="24" Height="24" CornerRadius="12"><TextBlock Text="1" Style="{StaticResource StepNumber}"/></Border>
+                <TextBlock Text="App" VerticalAlignment="Center" Margin="0,0,22,0"/>
+                <Border x:Name="WizDot2" Style="{StaticResource StepDot}" Width="24" Height="24" CornerRadius="12"><TextBlock Text="2" Style="{StaticResource StepNumber}"/></Border>
+                <TextBlock Text="Supersedence" VerticalAlignment="Center" Margin="0,0,22,0"/>
+                <Border x:Name="WizDot3" Style="{StaticResource StepDot}" Width="24" Height="24" CornerRadius="12"><TextBlock Text="3" Style="{StaticResource StepNumber}"/></Border>
+                <TextBlock Text="Assignment" VerticalAlignment="Center" Margin="0,0,22,0"/>
+                <Border x:Name="WizDot4" Style="{StaticResource StepDot}" Width="24" Height="24" CornerRadius="12"><TextBlock Text="4" Style="{StaticResource StepNumber}"/></Border>
+                <TextBlock Text="Summary" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="20,16,20,0">
+            <!-- 1: app details -->
+            <GroupBox x:Name="WizPage1" Header="App details">
+                <StackPanel>
+                    <TextBlock Text="Display name" Style="{StaticResource Label}"/>
+                    <TextBox x:Name="WizName"/>
+                    <TextBlock Text="Publisher" Style="{StaticResource Label}" Margin="0,10,0,4"/>
+                    <TextBox x:Name="WizPublisher"/>
+                    <TextBlock Text="Description" Style="{StaticResource Label}" Margin="0,10,0,4"/>
+                    <TextBox x:Name="WizDescription" AcceptsReturn="True" TextWrapping="Wrap" Height="70" VerticalContentAlignment="Top"/>
+                    <Border x:Name="WizTestBox" Style="{StaticResource InfoBox}" Margin="0,12,0,0">
+                        <TextBlock x:Name="WizTestText" TextWrapping="Wrap" FontSize="12"/>
+                    </Border>
+                </StackPanel>
+            </GroupBox>
+            <!-- 2: supersedence -->
+            <GroupBox x:Name="WizPage2" Header="Supersede a previous version (optional)" Visibility="Collapsed">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Hint}" Text="Choose the Intune app this package replaces. Devices with the old app get the new one."/>
+                        <DockPanel Margin="0,10,0,0">
+                            <Button x:Name="WizSearchApps" DockPanel.Dock="Right" Tag="&#xE721;" Content="Search"/>
+                            <TextBox x:Name="WizAppSearch" Margin="0,4"/>
+                        </DockPanel>
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Supersedes:" Foreground="{StaticResource MutedText}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="WizSupersedeText" Text="none" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <Button x:Name="WizSupersedeClear" Content="Clear" Style="{StaticResource SmallButton}" Margin="12,0,0,0"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <RadioButton x:Name="WizTypeUpdate" GroupName="SupType" Content="Update (install over the old version)" IsChecked="True"/>
+                            <RadioButton x:Name="WizTypeReplace" GroupName="SupType" Content="Replace (uninstall the old version first)"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <ListBox x:Name="WizAppList" Style="{StaticResource MethodList}" Margin="0,10,0,0"/>
+                </DockPanel>
+            </GroupBox>
+            <!-- 3: assignment -->
+            <GroupBox x:Name="WizPage3" Header="Assignment (optional)" Visibility="Collapsed">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Hint}" Text="Without a group the app is uploaded but not assigned."/>
+                        <DockPanel Margin="0,10,0,0">
+                            <Button x:Name="WizSearchGroups" DockPanel.Dock="Right" Tag="&#xE721;" Content="Search"/>
+                            <TextBox x:Name="WizGroupSearch" Margin="0,4"/>
+                        </DockPanel>
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Group:" Foreground="{StaticResource MutedText}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="WizGroupText" Text="none" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <Button x:Name="WizGroupClear" Content="Clear" Style="{StaticResource SmallButton}" Margin="12,0,0,0"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <RadioButton x:Name="WizIntentRequired" GroupName="WizIntent" Content="Required" IsChecked="True"/>
+                            <RadioButton x:Name="WizIntentAvailable" GroupName="WizIntent" Content="Available"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <ListBox x:Name="WizGroupList" Style="{StaticResource MethodList}" Margin="0,10,0,0"/>
+                </DockPanel>
+            </GroupBox>
+            <!-- 4: summary -->
+            <GroupBox x:Name="WizPage4" Header="Summary" Visibility="Collapsed">
+                <TextBox x:Name="WizSummary" Style="{StaticResource SelectableText}" FontFamily="Consolas" FontSize="12" VerticalAlignment="Top"/>
+            </GroupBox>
+        </Grid>
+
+        <Border Grid.Row="3" Background="White" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0" Padding="16,10">
+            <DockPanel>
+                <Button x:Name="WizCancel" Content="Cancel" Style="{StaticResource SecondaryButton}" DockPanel.Dock="Left"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="WizBack" Content="Back" Style="{StaticResource SecondaryButton}"/>
+                    <Button x:Name="WizNext" Content="Next"/>
+                    <Button x:Name="WizPublish" Tag="&#xE898;" Content="Publish" Style="{StaticResource SuccessButton}" Visibility="Collapsed"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>
