@@ -148,13 +148,34 @@
                                             <TextBlock x:Name="FrameworkText" FontSize="11" Foreground="{StaticResource Accent2}"/>
                                         </Border>
                                     </Grid>
-                                    <TextBlock Text="Installer (.msi / .exe)" Style="{StaticResource Label}"/>
+                                    <TextBlock Text="Installation" Style="{StaticResource Label}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="ModeSilent" Style="{StaticResource Chip}" GroupName="InstallMode" IsChecked="True">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE945;" FontFamily="{StaticResource Icons}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                <TextBlock Text="Silent (unattended)"/>
+                                            </StackPanel>
+                                        </RadioButton>
+                                        <RadioButton x:Name="ModeManual" Style="{StaticResource Chip}" GroupName="InstallMode">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE7C8;" FontFamily="{StaticResource Icons}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                <TextBlock Text="Manual (record my installation)"/>
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </StackPanel>
+                                    <Border x:Name="ManualInfo" CornerRadius="8" Background="#1B2547" Padding="12,10" Margin="0,10,0,0" Visibility="Collapsed">
+                                        <TextBlock Style="{StaticResource Hint}" Foreground="#C7D2FE"
+                                                   Text="A sandbox opens with the MSIX Packaging Tool recording. Install and configure the app yourself, then click 'Finish recording' in the small window there: the package is built, signed and copied back automatically."/>
+                                    </Border>
+                                    <TextBlock x:Name="LblInstaller" Text="Installer (.msi / .exe)" Style="{StaticResource Label}"/>
                                     <DockPanel>
                                         <Button x:Name="BtnRecipeBrowse" DockPanel.Dock="Right" Tag="&#xE838;" Content="Browse" Style="{StaticResource Ghost}" Margin="8,0,0,0"/>
                                         <TextBox x:Name="TxtInstaller"/>
                                     </DockPanel>
-                                    <TextBlock Text="Silent arguments (EXE only; MSI runs silently by itself)" Style="{StaticResource Label}"/>
-                                    <TextBox x:Name="TxtArguments" FontFamily="Cascadia Mono, Consolas"/>
+                                    <StackPanel x:Name="ArgumentsPanel">
+                                        <TextBlock Text="Silent arguments (EXE only; MSI runs silently by itself)" Style="{StaticResource Label}"/>
+                                        <TextBox x:Name="TxtArguments" FontFamily="Cascadia Mono, Consolas"/>
+                                    </StackPanel>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -200,7 +221,7 @@
                             <Border Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="Build" Style="{StaticResource H2}"/>
-                                    <TextBlock Text="Saves the recipe, then runs the steps unattended. Each sandbox closes by itself when it is done."
+                                    <TextBlock x:Name="BuildHint" Text="Saves the recipe, then runs the steps unattended. Each sandbox closes by itself when it is done."
                                                Style="{StaticResource Hint}" Margin="0,0,0,14"/>
                                     <WrapPanel>
                                         <Button x:Name="BtnBuild" Tag="&#xE7B8;" Content="Package + sign" Margin="0,0,8,8"/>

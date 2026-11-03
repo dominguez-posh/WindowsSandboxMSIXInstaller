@@ -327,8 +327,8 @@ function Update-RecipeList {
     $ui.RecipeList.Items.Clear()
     foreach ($r in Get-MsixRecipe | Sort-Object DisplayName) {
         $item = New-Object System.Windows.Controls.ListBoxItem
-        $ext = [IO.Path]::GetExtension($r.Installer).TrimStart('.').ToUpper()
-        $item.Content = New-ListItemContent $r.DisplayName "$($r.PackageName)  $Dot  $($r.Version)" $ext
+        $badge = if ($r.InstallMode -eq 'Manual') { 'MANUAL' } else { [IO.Path]::GetExtension($r.Installer).TrimStart('.').ToUpper() }
+        $item.Content = New-ListItemContent $r.DisplayName "$($r.PackageName)  $Dot  $($r.Version)" $badge $(if ($r.InstallMode -eq 'Manual') { 'Warn' } else { 'Accent2' })
         $item.Tag = $r
         [void]$ui.RecipeList.Items.Add($item)
         if ($r.PackageName -eq $selected) { $item.IsSelected = $true }
@@ -349,10 +349,31 @@ function Clear-RecipeForm {
     $ui.RecipeEditorTitle.Text = 'New recipe'
     $ui.FrameworkBadge.Visibility = 'Collapsed'
     $ui.BtnRecipeDelete.IsEnabled = $false
+    $ui.ModeSilent.IsChecked = $true
+    Update-ModeView
 }
+
+function Test-ManualMode { [bool]$ui.ModeManual.IsChecked }
+
+function Update-ModeView {
+    # Manual: installer optional, no silent arguments, build buttons say "Record".
+    $manual = Test-ManualMode
+    $ui.ManualInfo.Visibility = if ($manual) { 'Visible' } else { 'Collapsed' }
+    $ui.ArgumentsPanel.Visibility = if ($manual) { 'Collapsed' } else { 'Visible' }
+    $ui.LblInstaller.Text = if ($manual) { 'Installer (optional: ready to run in the sandbox; leave empty to download or copy it yourself)' } else { 'Installer (.msi / .exe)' }
+    $ui.BuildHint.Text = if ($manual) {
+        'Saves the recipe and opens a recording sandbox. After you click Finish recording there, everything else runs by itself.'
+    } else { 'Saves the recipe, then runs the steps unattended. Each sandbox closes by itself when it is done.' }
+    $ui.BtnBuild.Content = if ($manual) { 'Record + sign' } else { 'Package + sign' }
+    $ui.BtnBuildTest.Content = if ($manual) { 'Record + sign + test' } else { 'Package + sign + test' }
+}
+$ui.ModeSilent.Add_Checked({ Update-ModeView })
+$ui.ModeManual.Add_Checked({ Update-ModeView })
 
 function Show-Recipe($r) {
     $script:CurrentRecipe = $r
+    if ($r.InstallMode -eq 'Manual') { $ui.ModeManual.IsChecked = $true } else { $ui.ModeSilent.IsChecked = $true }
+    Update-ModeView
     $ui.TxtInstaller.Text = $r.Installer
     $ui.TxtArguments.Text = $r.Arguments
     $ui.TxtPackageName.Text = $r.PackageName
@@ -383,7 +404,9 @@ function Set-InstallerFromFile([string]$Path) {
 }
 
 function Get-RecipeForm {
-    if (-not $ui.TxtInstaller.Text -or -not (Test-Path -LiteralPath $ui.TxtInstaller.Text)) { throw 'Choose an existing installer file.' }
+    $manual = Test-ManualMode
+    if ($ui.TxtInstaller.Text -and -not (Test-Path -LiteralPath $ui.TxtInstaller.Text)) { throw 'The installer file does not exist.' }
+    if (-not $manual -and -not $ui.TxtInstaller.Text) { throw 'Choose an installer, or switch to manual recording.' }
     if (-not $ui.TxtPackageName.Text) { throw 'Package name is required.' }
     if (-not $ui.TxtDisplayName.Text) { throw 'Display name is required.' }
     if ($ui.TxtVersion.Text -notmatch '^\d+(\.\d+){0,3}$') { throw 'Version must look like 1.2.3.4.' }
@@ -396,6 +419,7 @@ function Get-RecipeForm {
         Arguments            = $ui.TxtArguments.Text
         Description          = $ui.TxtDescription.Text
         InstallLocation      = $ui.TxtInstallLocation.Text
+        InstallMode          = $(if ($manual) { 'Manual' } else { 'Silent' })
     }
 }
 
@@ -431,7 +455,9 @@ function Start-Build {
     if (-not (Get-MsixCertificate)) { throw 'Set up a signing certificate first (Certificate page).' }
     if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first (Windows runs one at a time).' }
     $title = @{ Package = 'Packaging'; Test = 'Packaging and testing'; All = 'Running full pipeline' }[$Mode]
-    Start-UiTask -Title "$title $($form.DisplayName)" -NeedsGraph:($Mode -eq 'All') -Arguments @{
+    $title = "$title $($form.DisplayName)"
+    if ($form.InstallMode -eq 'Manual') { $title = "Recording $($form.DisplayName): install it in the sandbox, then click Finish recording" }
+    Start-UiTask -Title $title -NeedsGraph:($Mode -eq 'All') -Arguments @{
         R = $form; Mode = $Mode; GroupId = $script:SelectedGroupId; Intent = (Get-Intent)
     } -Work {
         param($R, $Mode, $GroupId, $Intent)

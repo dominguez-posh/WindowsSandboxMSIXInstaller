@@ -111,26 +111,35 @@ function Save-MsixRecipe {
     <#
     .SYNOPSIS
     Creates or updates a recipe. The installer is copied into the workspace so the recipe stays reproducible.
+    .PARAMETER InstallMode
+    Silent: the installer runs unattended with -Arguments (installer required).
+    Manual: you install the app yourself in a recording sandbox; the installer is optional and just provided there.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$InstallerPath,
+        [string]$InstallerPath = '',
         [Parameter(Mandatory)][string]$PackageName,
         [Parameter(Mandatory)][string]$DisplayName,
         [string]$PublisherDisplayName = '',
         [string]$Version = '1.0.0.0',
         [string]$Arguments = '',
         [string]$Description = '',
-        [string]$InstallLocation = ''
+        [string]$InstallLocation = '',
+        [ValidateSet('Silent', 'Manual')][string]$InstallMode = 'Silent'
     )
+    if ($InstallMode -eq 'Silent' -and -not $InstallerPath) { throw 'Silent recipes need an installer.' }
     $PackageName = ConvertTo-MsixPackageName $PackageName
     $dir = Join-Path (Get-MsixWorkspace).Recipes $PackageName
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $source = (Resolve-Path -LiteralPath $InstallerPath).Path
-    $target = Join-Path $dir (Split-Path $source -Leaf)
-    if ($source -ne $target) { Copy-Item -LiteralPath $source -Destination $target -Force }
+    $target = ''
+    if ($InstallerPath) {
+        $source = (Resolve-Path -LiteralPath $InstallerPath).Path
+        $target = Join-Path $dir (Split-Path $source -Leaf)
+        if ($source -ne $target) { Copy-Item -LiteralPath $source -Destination $target -Force }
+    }
 
     $recipe = [ordered]@{
+        InstallMode          = $InstallMode
         PackageName          = $PackageName
         DisplayName          = $DisplayName
         PublisherDisplayName = $(if ($PublisherDisplayName) { $PublisherDisplayName } else { $DisplayName })
@@ -167,8 +176,11 @@ function New-MsixConversionTemplate {
         [Parameter(Mandatory)][string]$Publisher,
         [Parameter(Mandatory)][string]$InstallerPath,
         [Parameter(Mandatory)][string]$PackagePath,
-        [string]$TemplatePath
+        [string]$TemplatePath,
+        # Overrides the recipe's arguments (manual recording passes the recording window here).
+        [string]$InstallerArguments
     )
+    $arguments = if ($PSBoundParameters.ContainsKey('InstallerArguments')) { $InstallerArguments } else { $Recipe.Arguments }
     $ns = 'http://schemas.microsoft.com/appx/msixpackagingtool/template/2018'
     $nsV4 = 'http://schemas.microsoft.com/msix/msixpackagingtool/template/1910'
     $xml = New-Object System.Xml.XmlDocument
@@ -191,7 +203,7 @@ function New-MsixConversionTemplate {
 
     $inst = $xml.CreateElement('Installer', $ns)
     $inst.SetAttribute('Path', $InstallerPath)
-    if ($Recipe.Arguments) { $inst.SetAttribute('Arguments', $Recipe.Arguments) }
+    if ($arguments) { $inst.SetAttribute('Arguments', $arguments) }
     if ($Recipe.InstallLocation) { $inst.SetAttribute('InstallLocation', $Recipe.InstallLocation) }
     [void]$root.AppendChild($inst)
 

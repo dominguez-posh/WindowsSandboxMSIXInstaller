@@ -1,7 +1,8 @@
 # Runs INSIDE Windows Sandbox as logon command. Reads C:\MsixStudio\Job\job.json, does the job
 # and reports progress/results to status.json in the same (host-mapped) folder.
 #   Interactive: install the MSIX Packaging Tool, trust the signing certificate, open the tool
-#   Package:     install the tool, run the conversion template unattended, close the sandbox
+#   Package:     install the tool, run the conversion template, close the sandbox; unattended, or with
+#                job.Manual the "installer" is ManualCapture.ps1 and the user installs while it records
 #   Test:        trust the certificate, install the package, start each app, screenshot, uninstall, close
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,11 @@ $ToolchainDir = 'C:\MsixStudio\Toolchain'
 $OutDir       = Join-Path $JobDir 'out'
 $ToolFamily   = 'Microsoft.MSIXPackagingTool_8wekyb3d8bbwe'
 
-Start-Transcript -Path (Join-Path $OutDir 'bootstrap.log') -Force | Out-Null
+# Logs go to %TEMP% while the sandbox works: the Packaging Tool excludes that folder from captures,
+# a log file in the job folder could otherwise end up in the package. Copied to out\ at the end.
+$TempLog = Join-Path $env:TEMP 'msixstudio'
+New-Item -ItemType Directory $TempLog -Force | Out-Null
+Start-Transcript -Path (Join-Path $TempLog 'bootstrap.log') -Force | Out-Null
 $Host.UI.RawUI.WindowTitle = 'MSIX Sandbox Studio'
 $job = Get-Content (Join-Path $JobDir 'job.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 
@@ -61,9 +66,14 @@ function Save-Screenshot {
     $g.Dispose(); $bmp.Dispose()
 }
 
+function Save-Logs {
+    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    Copy-Item (Join-Path $TempLog '*') $OutDir -Force -ErrorAction SilentlyContinue
+}
+
 function Close-Sandbox {
+    Save-Logs
     if ($job.AutoClose) {
-        Stop-Transcript | Out-Null
         Start-Sleep -Seconds 3
         shutdown.exe /s /t 0
     }
@@ -84,13 +94,16 @@ try {
 
         'Package' {
             Install-PackagingTool | Out-Null
-            Set-JobStatus Running "Converting $($job.Installer)"
+            # No status writes from here until the tool is done: the recording window and the
+            # silent installer run while the Packaging Tool captures changes.
+            if ($job.Manual) { Set-JobStatus Running 'Recording - install the app in the sandbox, then click Finish recording' }
+            else { Set-JobStatus Running "Converting $($job.Installer)" }
             # App execution alias, created when the tool is registered for the user.
             $cli = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\MsixPackagingTool.exe'
             if (-not (Test-Path $cli)) { throw "MSIX Packaging Tool command line not found ($cli)." }
             # Windows PowerShell turns stderr lines of native tools into errors; with 'Stop' the first one would abort.
             $ErrorActionPreference = 'Continue'
-            & $cli create-package --template (Join-Path $JobDir 'template.xml') -v 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath (Join-Path $OutDir 'conversion.log')
+            & $cli create-package --template (Join-Path $JobDir 'template.xml') -v 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath (Join-Path $TempLog 'conversion.log')
             $exit = $LASTEXITCODE
             $ErrorActionPreference = 'Stop'
 
@@ -101,6 +114,9 @@ try {
             $msix = Join-Path $OutDir $job.PackageFile
             if (Test-Path $msix) {
                 Set-JobStatus Succeeded 'Done' "Package created ($([math]::Round((Get-Item $msix).Length / 1MB, 1)) MB)."
+            }
+            elseif ($job.Manual -and $exit -ne 0) {
+                Set-JobStatus Failed 'Recording' "Recording cancelled or conversion failed (exit code $exit). See conversion.log."
             }
             else {
                 Set-JobStatus Failed 'Conversion' "No package was created (exit code $exit). See conversion.log."

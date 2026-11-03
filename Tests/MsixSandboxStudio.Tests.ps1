@@ -67,6 +67,14 @@ Describe 'Conversion template' {
     It 'puts the description in the V4 namespace' {
         $script:Xml.OuterXml | Should -Match 'V4:PackageDescription="Desc"'
     }
+    It 'lets manual recording replace the installer arguments' {
+        $r = [pscustomobject]@{ PackageName = 'A.B'; DisplayName = 'A'; PublisherDisplayName = 'A'; Version = '1'; Arguments = '/S' }
+        $x = [xml](New-MsixConversionTemplate -Recipe $r -Publisher 'CN=A' -InstallerPath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
+            -InstallerArguments '-File C:\MsixStudio\Tools\ManualCapture.ps1' -PackagePath 'y')
+        $inst = (Select-Xml -Xml $x -XPath '//t:Installer' -Namespace $script:Ns).Node
+        $inst.Path | Should -Match 'powershell\.exe$'
+        $inst.Arguments | Should -Be '-File C:\MsixStudio\Tools\ManualCapture.ps1'
+    }
     It 'has no XML declaration (the file is written as UTF-8)' {
         (New-MsixConversionTemplate -Recipe ([pscustomobject]@{ PackageName = 'A.B'; DisplayName = 'A'; PublisherDisplayName = 'A'; Version = '1' }) -Publisher 'CN=A' -InstallerPath 'x' -PackagePath 'y') |
             Should -Not -Match '<\?xml'
@@ -97,6 +105,15 @@ Describe 'Recipes' {
         (Get-MsixRecipe -Name 'TestApp').DisplayName | Should -Be 'Test App'
         Remove-MsixRecipe -Name 'TestApp'
         Get-MsixRecipe -Name 'TestApp' | Should -BeNullOrEmpty
+    }
+    It 'saves a manual recipe without installer' {
+        $r = Save-MsixRecipe -PackageName 'Manual.App' -DisplayName 'Manual App' -Version '2' -InstallMode Manual
+        $r.InstallMode | Should -Be 'Manual'
+        $r.Installer | Should -BeNullOrEmpty
+        Remove-MsixRecipe -Name 'Manual.App'
+    }
+    It 'refuses a silent recipe without installer' {
+        { Save-MsixRecipe -PackageName 'Silent.App' -DisplayName 'Silent App' } | Should -Throw
     }
     It 'reads product name and version from an EXE' {
         $info = Get-MsixInstallerInfo "$env:SystemRoot\System32\notepad.exe"
