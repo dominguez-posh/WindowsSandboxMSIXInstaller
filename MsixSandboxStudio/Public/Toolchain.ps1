@@ -57,7 +57,7 @@ function Get-MsixToolchain {
     foreach ($f in $m.Files) {
         $p = Join-Path $dir $f.Name
         if (-not (Test-Path $p)) { $ok = $false; continue }
-        if ($VerifyHash -and (Get-FileHash $p -Algorithm SHA256).Hash -ne $f.Sha256) {
+        if ($VerifyHash -and (Get-MsixSha256 $p) -ne $f.Sha256) {
             Write-MsixLog "Hash mismatch: $($f.Name)" -Level Error
             $ok = $false
         }
@@ -111,7 +111,7 @@ function Update-MsixToolchain {
         SdkToolsVersion = $sdkVersion
         Downloaded      = (Get-Date).ToString('o')
         Files           = @($files | ForEach-Object {
-            [ordered]@{ Name = $_.Name; Url = $_.Url; Sha256 = (Get-FileHash (Join-Path $dir $_.Name) -Algorithm SHA256).Hash }
+            [ordered]@{ Name = $_.Name; Url = $_.Url; Sha256 = (Get-MsixSha256 (Join-Path $dir $_.Name)) }
         })
     }
     $manifest | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $dir 'toolchain.json') -Encoding UTF8

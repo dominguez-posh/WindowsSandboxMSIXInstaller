@@ -96,3 +96,13 @@ function Invoke-MsixDownload {
     finally { $client.Dispose() }
     Move-Item -LiteralPath $tmp -Destination $Destination -Force
 }
+
+function Get-MsixSha256 {
+    # SHA256 as uppercase hex. Plain .NET instead of Get-FileHash: that one lives in a script module
+    # which fails to load in background runspaces when the process inherited PowerShell 7's PSModulePath.
+    param([Parameter(Mandatory)][string]$Path)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('X2') }) }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
