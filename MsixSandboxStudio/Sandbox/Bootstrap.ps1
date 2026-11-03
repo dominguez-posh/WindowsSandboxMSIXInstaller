@@ -11,6 +11,11 @@ $JobDir       = 'C:\MsixStudio\Job'
 $ToolchainDir = 'C:\MsixStudio\Toolchain'
 $OutDir       = Join-Path $JobDir 'out'
 $ToolFamily   = 'Microsoft.MSIXPackagingTool_8wekyb3d8bbwe'
+# Windows services (deployment, MSIX Packaging Tool) cannot use the mapped host folders ("Access denied"):
+# the sandbox works on local copies; only results go back to the job folder.
+$LocalDir     = 'C:\MsixStudioLocal'
+$LocalInput   = Join-Path $LocalDir 'input'
+$LocalOut     = Join-Path $LocalDir 'out'
 
 # Logs go to %TEMP% while the sandbox works: the Packaging Tool excludes that folder from captures,
 # a log file in the job folder could otherwise end up in the package. Copied to out\ at the end.
@@ -30,6 +35,12 @@ function Set-JobStatus {
     Move-Item $tmp (Join-Path $JobDir 'status.json') -Force
 }
 
+function Copy-JobInput {
+    # Local copy of the job input (installers, base package, package to test), before any capture starts.
+    New-Item -ItemType Directory $LocalInput, $LocalOut -Force | Out-Null
+    Copy-Item (Join-Path $JobDir 'input\*') $LocalInput -Recurse -Force
+}
+
 function Install-PackagingTool {
     Set-JobStatus Running 'Installing MSIX Packaging Tool driver'
     # DISM wants a local .cab with the right extension.
@@ -39,11 +50,15 @@ function Install-PackagingTool {
     Add-WindowsPackage -Online -PackagePath $cab -NoRestart | Out-Null
 
     Set-JobStatus Running 'Installing MSIX Packaging Tool'
-    Add-AppxProvisionedPackage -Online -PackagePath (Join-Path $ToolchainDir 'MSIXPackagingTool.msixbundle') `
-        -LicensePath (Join-Path $ToolchainDir 'MSIXPackagingTool.License.xml') | Out-Null
+    # Local copies: the deployment service cannot read from the mapped (host) folder ("Access denied").
+    $bundle = 'C:\Temp\MSIXPackagingTool.msixbundle'
+    $license = 'C:\Temp\MSIXPackagingTool.License.xml'
+    Copy-Item (Join-Path $ToolchainDir 'MSIXPackagingTool.msixbundle') $bundle -Force
+    Copy-Item (Join-Path $ToolchainDir 'MSIXPackagingTool.License.xml') $license -Force
+    Add-AppxProvisionedPackage -Online -PackagePath $bundle -LicensePath $license | Out-Null
     # Provisioned packages register at the next logon; register for the already logged-on user now.
     try { Add-AppxPackage -RegisterByFamilyName -MainPackage $ToolFamily }
-    catch { Add-AppxPackage -Path (Join-Path $ToolchainDir 'MSIXPackagingTool.msixbundle') }
+    catch { Add-AppxPackage -Path $bundle }
     Get-AppxPackage -Name 'Microsoft.MSIXPackagingTool'
 }
 
@@ -94,6 +109,7 @@ try {
         }
 
         'Package' {
+            Copy-JobInput
             Install-PackagingTool | Out-Null
             # No status writes from here until the tool is done: the installer runs while the tool captures.
             Set-JobStatus Running "Converting $($job.Installer)"
@@ -110,6 +126,8 @@ try {
             $logs = Join-Path $env:LOCALAPPDATA "Packages\$ToolFamily\LocalState\DiagOutputDir"
             if (Test-Path $logs) { Copy-Item $logs (Join-Path $OutDir 'PackagingToolLogs') -Recurse -Force -ErrorAction SilentlyContinue }
 
+            # The template saves to the local folder; results go back to the job folder now.
+            Copy-Item (Join-Path $LocalOut '*') $OutDir -Force -ErrorAction SilentlyContinue
             $msix = Join-Path $OutDir $job.PackageFile
             if (Test-Path $msix) {
                 Set-JobStatus Succeeded 'Done' "Package created ($([math]::Round((Get-Item $msix).Length / 1MB, 1)) MB)."
@@ -122,6 +140,8 @@ try {
         'Record' {
             # The recorder shows the progress below (it reads status.json) and takes over once 'Ready'.
             Start-Process powershell.exe -ArgumentList '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "$PSScriptRoot\Recorder.ps1"
+            Set-JobStatus Running 'Copying installer'
+            Copy-JobInput
             Import-SigningCertificate
             Install-PackagingTool | Out-Null
             # Logs first: once 'Ready' is out, the user may start recording and the job folder must stay untouched.
@@ -131,7 +151,8 @@ try {
 
         'Test' {
             Import-SigningCertificate
-            $file = Join-Path $JobDir "input\$($job.PackageFile)"
+            Copy-JobInput
+            $file = Join-Path $LocalInput $job.PackageFile
             Set-JobStatus Running 'Installing package'
             Add-AppxPackage -Path $file
             $pkg = Get-AppxPackage -Name $job.IdentityName | Select-Object -First 1

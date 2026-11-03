@@ -2,12 +2,16 @@
 .SYNOPSIS
     MSIX Sandbox Studio - GUI for the MsixSandboxStudio module.
 .DESCRIPTION
-    Long-running work (downloads, sandbox jobs, uploads) runs in a background runspace; its log lines
-    are queued and shown live in the activity panel, so the window never freezes.
-    Interactive sign-ins (Microsoft Graph, Azure) run on the UI thread.
+    Look and window technique of the M365 MFA Administration tool: shared UI\Theme.xaml, slate header with
+    connection state, Start.cmd starts the console hidden; interactive sign-ins show the console centered over
+    the tool only while signing in, so the Microsoft sign-in dialog is always in front (no second window).
+    Long-running work (downloads, sandbox jobs, uploads) runs in a background runspace; its log lines are
+    queued and shown live in the activity panel, so the window never freezes.
+.PARAMETER HideConsole
+    Set by Start.cmd: hides the console window of this process.
 #>
 [CmdletBinding()]
-param()
+param([switch]$HideConsole)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
@@ -15,6 +19,69 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 $script:AppRoot    = $PSScriptRoot
 $script:ModulePath = Join-Path $PSScriptRoot 'MsixSandboxStudio\MsixSandboxStudio.psd1'
 Import-Module $script:ModulePath -Force
+
+# ---------------------------------------------------------------- console window (M365 MFA tool technique)
+if (-not ('MsixStudio.NativeWindow' -as [type])) {
+    Add-Type -Namespace MsixStudio -Name NativeWindow -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
+[StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+'@
+}
+
+function Hide-ConsoleWindow {
+    # The console is looked up again each time: Windows Terminal may take it over when it becomes visible.
+    param([IntPtr]$Window = [IntPtr]::Zero)
+    $native = [MsixStudio.NativeWindow]
+    if ($Window -ne [IntPtr]::Zero) { [void]$native::ShowWindow($Window, 0) }
+    # GA_ROOTOWNER (3): with Windows Terminal, the console window is a hidden pseudo window owned by the terminal.
+    $current = $native::GetAncestor($native::GetConsoleWindow(), 3)
+    if ($current -ne [IntPtr]::Zero -and $current -ne $Window) { [void]$native::ShowWindow($current, 0) }
+}
+
+function Invoke-InteractiveSignIn {
+    <#
+    The sign-in dialog (Web Account Manager) belongs to the console window. Windows hides windows whose owner
+    is hidden, so the console is shown centered over the tool while signing in and hidden again afterwards;
+    then the tool is activated again.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Action)
+    $native = [MsixStudio.NativeWindow]
+    $active = $native::GetForegroundWindow()
+    $console = $native::GetAncestor($native::GetConsoleWindow(), 3)
+    $state = if ($console -eq [IntPtr]::Zero) { 'None' }
+             elseif ($native::IsIconic($console)) { 'Minimized' }
+             elseif (-not $native::IsWindowVisible($console)) { 'Hidden' }
+             else { 'Visible' }
+    if ($state -in 'Minimized', 'Hidden') {
+        [void]$native::ShowWindow($console, 9)   # SW_RESTORE
+        $toolRect = New-Object MsixStudio.NativeWindow+RECT
+        $consoleRect = New-Object MsixStudio.NativeWindow+RECT
+        if ($active -ne [IntPtr]::Zero -and $native::GetWindowRect($active, [ref]$toolRect) -and $native::GetWindowRect($console, [ref]$consoleRect)) {
+            $x = [int](($toolRect.Left + $toolRect.Right - ($consoleRect.Right - $consoleRect.Left)) / 2)
+            $y = [int](($toolRect.Top + $toolRect.Bottom - ($consoleRect.Bottom - $consoleRect.Top)) / 2)
+            [void]$native::SetWindowPos($console, [IntPtr]::Zero, $x, $y, 0, 0, 0x0001 -bor 0x0004)   # SWP_NOSIZE | SWP_NOZORDER
+        }
+    }
+    if ($state -ne 'None') { [void]$native::SetForegroundWindow($console) }
+    try { & $Action }
+    finally {
+        switch ($state) {
+            'Minimized' { [void]$native::ShowWindow($console, 6) }   # SW_MINIMIZE
+            'Hidden'    { Hide-ConsoleWindow -Window $console }
+        }
+        if ($active -ne [IntPtr]::Zero) { [void]$native::SetForegroundWindow($active) }
+    }
+}
+
+if ($HideConsole) { Hide-ConsoleWindow }
 
 # ---------------------------------------------------------------- window
 if (-not [System.Windows.Application]::Current) { [void](New-Object System.Windows.Application) }
@@ -29,30 +96,37 @@ foreach ($node in $xaml.SelectNodes("//*[@*[local-name()='Name']]")) {
     $name = $node.Attributes | Where-Object LocalName -eq 'Name' | Select-Object -ExpandProperty Value
     $ui[$name] = $window.FindName($name)
 }
-$ui.VersionText.Text = 'v' + (Get-Module MsixSandboxStudio).Version.ToString()
+$script:Version = (Get-Module MsixSandboxStudio).Version.ToString()
+$window.Title = "MSIX Sandbox Studio $script:Version"
 
+$script:BrushConverter = New-Object System.Windows.Media.BrushConverter
 function Get-Brush([string]$Key) { [System.Windows.Application]::Current.Resources[$Key] }
+function ConvertTo-Brush([string]$Hex) { $script:BrushConverter.ConvertFrom($Hex) }
 $Dot = [char]0x00B7   # separator in list items (kept out of the source: PS 5.1 reads BOM-less files as ANSI)
 
-# ---------------------------------------------------------------- log
+# ---------------------------------------------------------------- log (items as in the MFA tool: Line, Brush, Weight)
+$script:LogBrushes = @{
+    Info    = Get-Brush 'Text'
+    Success = Get-Brush 'Success'
+    Warning = ConvertTo-Brush '#B45309'
+    Error   = Get-Brush 'Danger'
+}
 function Add-LogLine {
     param([string]$Text, [string]$Level = 'Info')
-    $tb = New-Object System.Windows.Controls.TextBlock
-    $tb.Text = $Text
-    $tb.Foreground = switch ($Level) {
-        'Success' { Get-Brush 'Ok' }
-        'Warning' { Get-Brush 'Warn' }
-        'Error'   { Get-Brush 'Bad' }
-        default   { [System.Windows.Media.BrushConverter]::new().ConvertFrom('#AAB4CC') }
+    $item = [pscustomobject]@{
+        Line   = $Text
+        Brush  = $script:LogBrushes[$Level]
+        Weight = $(if ($Level -in 'Error', 'Success') { 'SemiBold' } else { 'Normal' })
     }
-    [void]$ui.LogList.Items.Add($tb)
+    [void]$ui.LogList.Items.Add($item)
     while ($ui.LogList.Items.Count -gt 800) { $ui.LogList.Items.RemoveAt(0) }
-    $ui.LogList.ScrollIntoView($tb)
+    $ui.LogList.ScrollIntoView($item)
 }
 Set-MsixLogSink { param($line, $level) Add-LogLine $line $level }
+function Write-UiLog([string]$Text, [string]$Level = 'Info') { Add-LogLine ('{0:HH:mm:ss}  {1}' -f (Get-Date), $Text) $Level }
 
 function Show-Error([string]$Message) {
-    Add-LogLine ('{0:HH:mm:ss}  {1}' -f (Get-Date), $Message) 'Error'
+    Write-UiLog $Message 'Error'
     [void][System.Windows.MessageBox]::Show($window, $Message, 'MSIX Sandbox Studio', 'OK', 'Error')
 }
 
@@ -95,7 +169,7 @@ function Start-UiTask {
     )
     if ($script:Task) { Show-Error 'Another task is still running.'; return }
     $token = if ($NeedsGraph) { Get-GraphAccessToken } else { $null }
-    if ($NeedsGraph -and -not $token) { Show-Error 'Sign in to Intune first (Intune page).'; return }
+    if ($NeedsGraph -and -not $token) { Show-Error 'Sign in to Intune first (Sign in, top right).'; return }
 
     $queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
     $rs = [runspacefactory]::CreateRunspace()
@@ -122,10 +196,9 @@ function Start-UiTask {
 
 function Set-Busy([string]$Title) {
     $on = [bool]$Title
-    $ui.BusyPill.Visibility = if ($on) { 'Visible' } else { 'Collapsed' }
-    $ui.BusyBar.Visibility = if ($on) { 'Visible' } else { 'Hidden' }
+    $ui.BusyPanel.Visibility = if ($on) { 'Visible' } else { 'Collapsed' }
     $ui.BusyText.Text = $Title
-    foreach ($b in 'BtnBuild', 'BtnBuildTest', 'BtnBuildAll', 'BtnPkgTest', 'BtnPkgSign', 'BtnPkgPublish', 'BtnDashSandbox', 'BtnDashRecord', 'BtnToolchainUpdate', 'BtnToolchainForce', 'BtnRecipeSave', 'BtnCertIntune') {
+    foreach ($b in 'BtnBuild', 'BtnBuildTest', 'BtnBuildAll', 'BtnPkgTest', 'BtnPkgSign', 'BtnPkgPublish', 'BtnPkgUpdate', 'BtnDashSandbox', 'BtnDashRecord', 'BtnToolchainUpdate', 'BtnToolchainForce', 'BtnRecipeSave', 'BtnCertIntune') {
         $ui[$b].IsEnabled = -not $on
     }
     if (-not $on) { Update-PackageButtons }
@@ -133,18 +206,16 @@ function Set-Busy([string]$Title) {
 
 function Complete-UiTask {
     $t = $script:Task
-    while ($t.Queue.Count -gt 0) {
-        $item = $null
-        if ($t.Queue.TryDequeue([ref]$item)) { Add-LogLine $item[0] $item[1] }
-    }
+    $item = $null
+    while ($t.Queue.TryDequeue([ref]$item)) { Add-LogLine $item[0] $item[1] }
     $result = $null; $err = $null
     try { $result = @($t.PS.EndInvoke($t.Handle)) }
     catch { $err = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message } }
-    foreach ($e in $t.PS.Streams.Error) { Add-LogLine ('{0:HH:mm:ss}  {1}' -f (Get-Date), $e.ToString()) 'Warning' }
+    foreach ($e in $t.PS.Streams.Error) { Write-UiLog $e.ToString() 'Warning' }
     $t.PS.Dispose(); $t.Runspace.Dispose()
     $script:Task = $null
     Set-Busy ''
-    if ($err) { Add-LogLine ('{0:HH:mm:ss}  {1} failed: {2}' -f (Get-Date), $t.Title, $err) 'Error' }
+    if ($err) { Write-UiLog "$($t.Title) failed: $err" 'Error' }
     if ($t.OnDone) {
         try { & $t.OnDone $result $err } catch { Show-Error $_.Exception.Message }
     }
@@ -159,31 +230,38 @@ $timer.Add_Tick({
     if ($script:Task) {
         $item = $null
         while ($script:Task.Queue.TryDequeue([ref]$item)) { Add-LogLine $item[0] $item[1] }
-        $ui.SpinnerRotate.Angle = ($ui.SpinnerRotate.Angle + 30) % 360
         if ($script:Task.Handle.IsCompleted) { Complete-UiTask }
     }
     if ($script:Tick % 15 -eq 0) { Update-SandboxState }
 })
 
 function Update-SandboxState {
-    $running = Test-MsixSandboxRunning
-    $ui.SandboxDot.Fill = if ($running) { Get-Brush 'Ok' } else { Get-Brush 'Muted' }
-    $ui.SandboxStateText.Text = if ($running) { 'Sandbox running' } else { 'Sandbox idle' }
+    $ui.TxtSandboxState.Text = if (Test-MsixSandboxRunning) { 'Sandbox running' } else { 'Sandbox idle' }
 }
 
-# ---------------------------------------------------------------- navigation
-$pages = [ordered]@{
-    Dashboard   = @('Dashboard', 'Readiness of this computer and quick start')
-    Recipes     = @('Recipes', 'One recipe per app: installer, silent arguments, package identity')
-    Packages    = @('Packages', 'Signed packages in the output folder: test, re-sign, publish')
-    Certificate = @('Certificate', 'Code-signing certificate used for every package')
-    Intune      = @('Intune', 'Microsoft Graph sign-in and assignment for published apps')
-    Settings    = @('Settings', 'Toolchain, sandbox resources and signing options')
+function Update-ConnectionStatus {
+    $c = Get-MsixIntuneContext
+    if ($c -and $c.Account) {
+        $ui.TxtConnectionStatus.Text = "Connected as $($c.Account)"
+        $ui.TxtConnectionStatus.Foreground = ConvertTo-Brush '#86EFAC'
+        $ui.TxtTenant.Text = "Tenant: $($c.TenantId)"
+    }
+    else {
+        $ui.TxtConnectionStatus.Text = 'Not signed in to Intune'
+        $ui.TxtConnectionStatus.Foreground = ConvertTo-Brush '#FCA5A5'
+        $ui.TxtTenant.Text = 'Tenant: -'
+    }
+    # Only the button that applies is enabled (as in the MFA tool)
+    $ui.BtnIntuneSignIn.IsEnabled = -not ($c -and $c.Account)
+    $ui.BtnIntuneSignOut.IsEnabled = [bool]($c -and $c.Account)
 }
+
+# ---------------------------------------------------------------- navigation + help
+$pages = @('Dashboard', 'Recipes', 'Packages', 'Certificate', 'Intune', 'Settings')
+$script:CurrentPage = 'Dashboard'
 function Show-Page([string]$Name) {
-    foreach ($p in $pages.Keys) { $ui["Page$p"].Visibility = if ($p -eq $Name) { 'Visible' } else { 'Collapsed' } }
-    $ui.PageTitle.Text = $pages[$Name][0]
-    $ui.PageSubtitle.Text = $pages[$Name][1]
+    $script:CurrentPage = $Name
+    foreach ($p in $pages) { $ui["Page$p"].Visibility = if ($p -eq $Name) { 'Visible' } else { 'Collapsed' } }
     $ui["Nav$Name"].IsChecked = $true
     switch ($Name) {
         'Dashboard'   { Update-Dashboard }
@@ -193,8 +271,9 @@ function Show-Page([string]$Name) {
         'Intune'      { Update-IntuneView }
         'Settings'    { Update-SettingsView }
     }
+    if ($ui.HelpPanel.Visibility -eq 'Visible') { Show-Help }
 }
-foreach ($p in $pages.Keys) {
+foreach ($p in $pages) {
     $ui["Nav$p"].Add_Checked({
         param($sender)
         $name = $sender.Name -replace '^Nav', ''
@@ -202,29 +281,66 @@ foreach ($p in $pages.Keys) {
     })
 }
 
+$script:HelpTexts = @{
+    Dashboard   = @(
+        @('What it does', 'MSIX Sandbox Studio turns installers into signed MSIX packages. Every run uses a fresh Windows Sandbox, so the capture is clean and nothing stays on this computer.'),
+        @('Record installation', 'Opens the MSIX Recorder in a sandbox. It installs the MSIX Packaging Tool by itself. Click Start recording, install and configure the app, click Stop recording. Every click is documented with a screenshot and the screen is recorded.'),
+        @('Recipes', 'For installers with a silent mode: one recipe per app, packaged unattended.'),
+        @('Readiness', 'All tiles should be green before the first run. The toolchain downloads automatically when needed.'))
+    Recipes     = @(
+        @('Silent', 'The installer runs unattended with the silent arguments. The framework is detected when you choose the installer (Inno Setup, NSIS, WiX, InstallShield ...).'),
+        @('Manual', 'Opens the MSIX Recorder: you install the app yourself while it records.'),
+        @('Identity', 'Package name and version identify the app on devices. Each new version needs a higher version number.'))
+    Packages    = @(
+        @('Test', 'Installs the package in a clean sandbox without network, starts every app, takes screenshots and uninstalls it.'),
+        @('Update', 'Restores this package in a sandbox (files, registry, Start menu entries) when the recording starts. Then run the app''s updater or the new setup; the new package contains everything.'),
+        @('Documentation', 'HTML report next to the package: how it was made, every click with screenshot, the screen recording, the test result and the full file list.'))
+    Certificate = @(
+        @('Publisher', 'The certificate subject (e.g. CN=Contoso Packaging) is the publisher of every package; it must match exactly, otherwise signing fails.'),
+        @('Trust', 'Devices must trust the certificate. With a self-signed one, click Trust via Intune once and assign the profile to the same devices as the apps.'))
+    Intune      = @(
+        @('Sign in', 'Sign in (top right) opens the Microsoft sign-in in front of this window. Needed rights: manage Intune apps and device configurations, read groups.'),
+        @('Assignment', 'Choose a group and the intent before publishing; without a group the app is only uploaded.'))
+    Settings    = @(
+        @('Toolchain', 'MSIX Packaging Tool, its driver and the Windows SDK signing tools are cached on this computer and mapped read-only into every sandbox.'),
+        @('Network', 'Packaging and recording sandboxes get network access when enabled (web installers). Test sandboxes never have network.'))
+}
+function Show-Help {
+    $ui.HelpTitle.Text = "Help: $script:CurrentPage"
+    $ui.HelpBody.Children.Clear()
+    foreach ($entry in $script:HelpTexts[$script:CurrentPage]) {
+        $l = New-Object System.Windows.Controls.TextBlock; $l.Text = $entry[0]; $l.Style = $window.FindResource('HelpLabel')
+        $t = New-Object System.Windows.Controls.TextBlock; $t.Text = $entry[1]; $t.Style = $window.FindResource('HelpText')
+        [void]$ui.HelpBody.Children.Add($l); [void]$ui.HelpBody.Children.Add($t)
+    }
+    $ui.HelpPanel.Visibility = 'Visible'
+}
+Add-Click $ui.BtnHelp { if ($ui.HelpPanel.Visibility -eq 'Visible') { $ui.HelpPanel.Visibility = 'Collapsed' } else { Show-Help } }
+Add-Click $ui.BtnHelpClose { $ui.HelpPanel.Visibility = 'Collapsed' }
+Add-Click $ui.BtnHeaderSettings { Show-Page 'Settings' }
+
 # ---------------------------------------------------------------- dashboard
 function New-ReadinessCard {
     param([string]$Glyph, [string]$Title, [ValidateSet('ok', 'warn', 'bad')][string]$State, [string]$Text, [string]$ActionText, [scriptblock]$Action)
-    $color = @{ ok = 'Ok'; warn = 'Warn'; bad = 'Bad' }[$State]
+    $color = @{ ok = Get-Brush 'Success'; warn = ConvertTo-Brush '#B45309'; bad = Get-Brush 'Danger' }[$State]
     $border = New-Object System.Windows.Controls.Border
-    $border.Style = $window.FindResource('Card')
-    $border.Margin = '0,0,16,16'
+    $border.Style = $window.FindResource('TileCard')
     $sp = New-Object System.Windows.Controls.StackPanel
     $head = New-Object System.Windows.Controls.DockPanel
-    $ico = New-Object System.Windows.Controls.TextBlock
-    $ico.Text = $Glyph; $ico.FontFamily = Get-Brush 'Icons'; $ico.FontSize = 18; $ico.Foreground = Get-Brush 'Accent2'
     $dot = New-Object System.Windows.Shapes.Ellipse
-    $dot.Width = 10; $dot.Height = 10; $dot.Fill = Get-Brush $color
+    $dot.Width = 10; $dot.Height = 10; $dot.Fill = $color
     [System.Windows.Controls.DockPanel]::SetDock($dot, 'Right')
-    [void]$head.Children.Add($dot); [void]$head.Children.Add($ico)
+    $ico = New-Object System.Windows.Controls.TextBlock
+    $ico.Text = $Glyph; $ico.Style = $window.FindResource('Glyph'); $ico.Foreground = Get-Brush 'Primary'
     $t = New-Object System.Windows.Controls.TextBlock
-    $t.Text = $Title; $t.FontWeight = 'SemiBold'; $t.FontSize = 14; $t.Margin = '0,12,0,4'
+    $t.Text = $Title; $t.Style = $window.FindResource('CardTitle')
+    [void]$head.Children.Add($dot); [void]$head.Children.Add($ico); [void]$head.Children.Add($t)
     $d = New-Object System.Windows.Controls.TextBlock
-    $d.Text = $Text; $d.Style = $window.FindResource('Hint'); $d.MinHeight = 34
-    [void]$sp.Children.Add($head); [void]$sp.Children.Add($t); [void]$sp.Children.Add($d)
+    $d.Text = $Text; $d.Style = $window.FindResource('Hint'); $d.Margin = '0,6,0,0'
+    [void]$sp.Children.Add($head); [void]$sp.Children.Add($d)
     if ($ActionText) {
         $b = New-Object System.Windows.Controls.Button
-        $b.Content = $ActionText; $b.Style = $window.FindResource('Small'); $b.HorizontalAlignment = 'Left'; $b.Margin = '0,10,0,0'
+        $b.Content = $ActionText; $b.Style = $window.FindResource('SmallButton'); $b.HorizontalAlignment = 'Left'; $b.Margin = '0,8,0,0'
         Add-Click $b $Action
         [void]$sp.Children.Add($b)
     }
@@ -234,10 +350,11 @@ function New-ReadinessCard {
 
 function Update-Dashboard {
     $s = Get-MsixHostStatus
+    $c = Get-MsixIntuneContext
     $ui.ReadinessGrid.Children.Clear()
     $cards = @(
         @{ Glyph = [char]0xE7F4; Title = 'Windows Sandbox'
-           State = $(if ($s.SandboxEnabled) { 'ok' } elseif ($s.EditionSupported) { 'bad' } else { 'bad' })
+           State = $(if ($s.SandboxEnabled) { 'ok' } else { 'bad' })
            Text = $(if ($s.SandboxEnabled) { "Enabled on $($s.OsCaption) ($($s.OsBuild))" } elseif ($s.EditionSupported) { 'Feature not enabled' } else { 'Not available on Windows Home' })
            ActionText = $(if (-not $s.SandboxEnabled -and $s.EditionSupported) { 'Enable (admin, reboot)' })
            Action = { Enable-MsixSandboxFeature } }
@@ -250,7 +367,7 @@ function Update-Dashboard {
            ActionText = $(if (-not $s.ToolchainReady) { 'Download now' })
            Action = { Invoke-ToolchainUpdate $false } }
         @{ Glyph = [char]0xEB95; Title = 'Signing certificate'
-           State = $(if ($s.CertificateReady) { 'ok' } elseif ($s.Certificate) { 'warn' } else { 'warn' })
+           State = $(if ($s.CertificateReady) { 'ok' } else { 'warn' })
            Text = $(if ($s.CertificateReady) { "$($s.Certificate.Subject), valid until $($s.Certificate.NotAfter.ToString('d'))" } elseif ($s.Certificate -and $s.Certificate.IsExpired) { 'Expired' } else { 'None configured' })
            ActionText = $(if (-not $s.CertificateReady) { 'Set up' })
            Action = { Show-Page 'Certificate' } }
@@ -258,34 +375,16 @@ function Update-Dashboard {
            State = $(if ($s.GraphModule) { 'ok' } else { 'warn' })
            Text = $(if ($s.GraphModule) { 'Module installed, Intune publishing available' } else { 'Install Microsoft.Graph.Authentication for Intune' }) }
         @{ Glyph = [char]0xE77B; Title = 'Intune session'
-           State = $(if (Get-MsixIntuneContext) { 'ok' } else { 'warn' })
-           Text = $(if ($c = Get-MsixIntuneContext) { $c.Account } else { 'Not signed in' })
-           ActionText = $(if (-not (Get-MsixIntuneContext)) { 'Sign in' })
-           Action = { Show-Page 'Intune' } }
+           State = $(if ($c -and $c.Account) { 'ok' } else { 'warn' })
+           Text = $(if ($c -and $c.Account) { $c.Account } else { 'Not signed in' })
+           ActionText = $(if (-not ($c -and $c.Account)) { 'Sign in' })
+           Action = { Connect-Intune } }
     )
-    foreach ($c in $cards) { [void]$ui.ReadinessGrid.Children.Add((New-ReadinessCard @c)) }
+    foreach ($card in $cards) { [void]$ui.ReadinessGrid.Children.Add((New-ReadinessCard @card)) }
     $ui.StatRecipes.Text = @(Get-MsixRecipe).Count
     $ui.StatPackages.Text = @(Get-ChildItem (Get-MsixWorkspace).Output -Filter '*.msix' -ErrorAction SilentlyContinue).Count
     Update-SandboxState
-}
-
-# Pipeline chips in the hero card
-$steps = @(@([char]0xE8FD, 'Recipe'), @([char]0xE7F4, 'Package'), @([char]0xEB95, 'Sign'), @([char]0xEBE8, 'Test'), @([char]0xE753, 'Intune'))
-for ($i = 0; $i -lt $steps.Count; $i++) {
-    $chip = New-Object System.Windows.Controls.Border
-    $chip.CornerRadius = 14; $chip.Padding = '12,6'; $chip.Margin = '0,0,6,6'
-    $chip.Background = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#33FFFFFF')
-    $sp = New-Object System.Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
-    $ic = New-Object System.Windows.Controls.TextBlock; $ic.Text = $steps[$i][0]; $ic.FontFamily = Get-Brush 'Icons'; $ic.Margin = '0,0,6,0'; $ic.VerticalAlignment = 'Center'
-    $tx = New-Object System.Windows.Controls.TextBlock; $tx.Text = $steps[$i][1]; $tx.FontWeight = 'SemiBold'
-    [void]$sp.Children.Add($ic); [void]$sp.Children.Add($tx); $chip.Child = $sp
-    [void]$ui.PipelineChips.Children.Add($chip)
-    if ($i -lt $steps.Count - 1) {
-        $arrow = New-Object System.Windows.Controls.TextBlock
-        $arrow.Text = [char]0xE76C; $arrow.FontFamily = Get-Brush 'Icons'; $arrow.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#A5B4FC')
-        $arrow.Margin = '0,0,6,6'; $arrow.VerticalAlignment = 'Center'
-        [void]$ui.PipelineChips.Children.Add($arrow)
-    }
+    Update-ConnectionStatus
 }
 
 function Invoke-ToolchainUpdate([bool]$Force) {
@@ -294,34 +393,43 @@ function Invoke-ToolchainUpdate([bool]$Force) {
     } -OnDone { Update-SettingsView }
 }
 
+function Assert-ReadyForSandbox {
+    if (-not (Get-MsixCertificate)) { throw 'Set up a signing certificate first (Certificate tab).' }
+    if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first (Windows runs one at a time).' }
+}
+
+function Start-Recording {
+    # Opens the MSIX Recorder; afterwards the package (and its documentation) is shown on the Packages tab.
+    param([hashtable]$Parameters, [string]$Title)
+    Start-UiTask -Title $Title -Arguments @{ P = $Parameters } -Work {
+        param($P) Start-MsixRecording @P
+    } -OnDone {
+        param($result, $err)
+        Update-RecipeList
+        if ($err -or -not $result) { return }
+        $r = $result[-1]
+        if ($r.PackagePath) { Show-Page 'Packages'; Select-Package $r.PackagePath }
+    }
+}
+
 Add-Click $ui.BtnDashNewRecipe { Show-Page 'Recipes'; Clear-RecipeForm }
 Add-Click $ui.BtnDashRecord {
-    if (-not (Get-MsixCertificate)) { throw 'Set up a signing certificate first (Certificate page).' }
-    if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first (Windows runs one at a time).' }
+    Assert-ReadyForSandbox
     $dlg = New-Object Microsoft.Win32.OpenFileDialog
     $dlg.Title = 'Installer to record (optional: Cancel to record without, e.g. to download it in the sandbox)'
     $dlg.Filter = 'Installers (*.msi;*.exe)|*.msi;*.exe|All files (*.*)|*.*'
-    $installer = ''
-    $prefill = @{}
+    $p = @{}
     if ($dlg.ShowDialog($window)) {
-        $installer = $dlg.FileName
-        $info = Get-MsixInstallerInfo -Path $installer
-        $prefill = @{
+        $info = Get-MsixInstallerInfo -Path $dlg.FileName
+        $p = @{
+            InstallerPath        = $dlg.FileName
             DisplayName          = $info.ProductName
             PackageName          = ConvertTo-MsixPackageName (($info.Manufacturer -split '\s')[0] + '.' + $info.ProductName)
             Version              = $info.Version
             PublisherDisplayName = $info.Manufacturer
         }
     }
-    Start-UiTask -Title 'Recording: Start recording in the sandbox, install the app, Stop recording' -Arguments @{ Installer = $installer; Prefill = $prefill } -Work {
-        param($Installer, $Prefill)
-        Start-MsixRecording -InstallerPath $Installer @Prefill
-    } -OnDone {
-        param($result, $err)
-        if ($err -or -not $result) { return }
-        $r = $result[-1]
-        if ($r.PackagePath) { Show-Page 'Packages'; Select-Package $r.PackagePath }
-    }
+    Start-Recording -Parameters $p -Title 'Recording: Start recording in the sandbox, install the app, Stop recording'
 }
 Add-Click $ui.BtnDashSandbox {
     if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; Windows runs one at a time.' }
@@ -331,13 +439,13 @@ Add-Click $ui.BtnDashSandbox {
 # ---------------------------------------------------------------- recipes
 $script:CurrentRecipe = $null
 
-function New-ListItemContent([string]$Title, [string]$Sub, [string]$Badge, [string]$BadgeColor = 'Accent2') {
+function New-ListItemContent([string]$Title, [string]$Sub, [string]$Badge, [ValidateSet('blue', 'green', 'yellow')][string]$BadgeColor = 'blue') {
+    $colors = @{ blue = @('#DBEAFE', '#1E40AF'); green = @('#DCFCE7', '#166534'); yellow = @('#FEF3C7', '#92400E') }[$BadgeColor]
     $grid = New-Object System.Windows.Controls.DockPanel
     if ($Badge) {
         $bd = New-Object System.Windows.Controls.Border
-        $bd.CornerRadius = 8; $bd.Padding = '8,2'; $bd.VerticalAlignment = 'Top'
-        $bd.Background = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#1B2547')
-        $bt = New-Object System.Windows.Controls.TextBlock; $bt.Text = $Badge; $bt.FontSize = 10; $bt.Foreground = Get-Brush $BadgeColor
+        $bd.CornerRadius = 10; $bd.Padding = '9,2'; $bd.VerticalAlignment = 'Top'; $bd.Background = ConvertTo-Brush $colors[0]
+        $bt = New-Object System.Windows.Controls.TextBlock; $bt.Text = $Badge; $bt.FontSize = 11; $bt.FontWeight = 'SemiBold'; $bt.Foreground = ConvertTo-Brush $colors[1]
         $bd.Child = $bt
         [System.Windows.Controls.DockPanel]::SetDock($bd, 'Right')
         [void]$grid.Children.Add($bd)
@@ -355,8 +463,9 @@ function Update-RecipeList {
     $ui.RecipeList.Items.Clear()
     foreach ($r in Get-MsixRecipe | Sort-Object DisplayName) {
         $item = New-Object System.Windows.Controls.ListBoxItem
-        $badge = if ($r.InstallMode -eq 'Manual') { 'MANUAL' } else { [IO.Path]::GetExtension($r.Installer).TrimStart('.').ToUpper() }
-        $item.Content = New-ListItemContent $r.DisplayName "$($r.PackageName)  $Dot  $($r.Version)" $badge $(if ($r.InstallMode -eq 'Manual') { 'Warn' } else { 'Accent2' })
+        $manual = $r.InstallMode -eq 'Manual'
+        $badge = if ($manual) { 'RECORDED' } else { [IO.Path]::GetExtension($r.Installer).TrimStart('.').ToUpper() }
+        $item.Content = New-ListItemContent $r.DisplayName "$($r.PackageName)  $Dot  $($r.Version)" $badge $(if ($manual) { 'yellow' } else { 'blue' })
         $item.Tag = $r
         [void]$ui.RecipeList.Items.Add($item)
         if ($r.PackageName -eq $selected) { $item.IsSelected = $true }
@@ -366,7 +475,7 @@ function Update-RecipeList {
 
 function Update-PublisherHint {
     $cert = Get-MsixCertificate
-    $ui.TxtPublisherHint.Text = if ($cert) { "Publisher: $($cert.Subject) (from the signing certificate)" } else { 'No signing certificate yet: set one up on the Certificate page before building.' }
+    $ui.TxtPublisherHint.Text = if ($cert) { "Publisher: $($cert.Subject) (from the signing certificate)" } else { 'No signing certificate yet: set one up on the Certificate tab before building.' }
 }
 
 function Clear-RecipeForm {
@@ -426,8 +535,8 @@ function Set-InstallerFromFile([string]$Path) {
     if (-not $ui.TxtArguments.Text) { $ui.TxtArguments.Text = $info.SuggestedArguments }
     $ui.FrameworkText.Text = "$($info.Type) $Dot $($info.Framework)"
     $ui.FrameworkBadge.Visibility = 'Visible'
-    if ($info.Type -eq 'EXE' -and -not $info.SuggestedArguments) {
-        Add-LogLine ('{0:HH:mm:ss}  Setup framework not recognized: enter the silent arguments yourself.' -f (Get-Date)) 'Warning'
+    if ($info.Type -eq 'EXE' -and -not $info.SuggestedArguments -and -not (Test-ManualMode)) {
+        Write-UiLog 'Setup framework not recognized: enter the silent arguments yourself, or record the installation manually.' 'Warning'
     }
 }
 
@@ -480,10 +589,8 @@ Add-Click $ui.BtnRecipeDelete {
 function Start-Build {
     param([ValidateSet('Package', 'Test', 'All')][string]$Mode)
     $form = Get-RecipeForm
-    if (-not (Get-MsixCertificate)) { throw 'Set up a signing certificate first (Certificate page).' }
-    if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first (Windows runs one at a time).' }
-    $title = @{ Package = 'Packaging'; Test = 'Packaging and testing'; All = 'Running full pipeline' }[$Mode]
-    $title = "$title $($form.DisplayName)"
+    Assert-ReadyForSandbox
+    $title = "$(@{ Package = 'Packaging'; Test = 'Packaging and testing'; All = 'Running full pipeline' }[$Mode]) $($form.DisplayName)"
     if ($form.InstallMode -eq 'Manual') { $title = "Recording $($form.DisplayName): Start recording in the sandbox, install, Stop recording" }
     Start-UiTask -Title $title -NeedsGraph:($Mode -eq 'All') -Arguments @{
         R = $form; Mode = $Mode; GroupId = $script:SelectedGroupId; Intent = (Get-Intent)
@@ -536,7 +643,7 @@ function Update-PackageList {
         try { $p = Get-MsixPackageInfo -Path $f.FullName } catch { continue }
         $item = New-Object System.Windows.Controls.ListBoxItem
         $badge = if ($p.IsSigned) { 'SIGNED' } else { 'UNSIGNED' }
-        $item.Content = New-ListItemContent $p.DisplayName ("{0}  $Dot  {1}  $Dot  {2:N1} MB" -f $p.Version, $p.Architecture, ($p.SizeBytes / 1MB)) $badge $(if ($p.IsSigned) { 'Ok' } else { 'Warn' })
+        $item.Content = New-ListItemContent $p.DisplayName ("{0}  $Dot  {1}  $Dot  {2:N1} MB" -f $p.Version, $p.Architecture, ($p.SizeBytes / 1MB)) $badge $(if ($p.IsSigned) { 'green' } else { 'yellow' })
         $item.Tag = $p
         [void]$ui.PackageList.Items.Add($item)
         if ($p.Path -eq $selected) { $item.IsSelected = $true }
@@ -554,9 +661,11 @@ function Update-PackageButtons {
     $idle = -not $script:Task
     $ui.BtnPkgTest.IsEnabled = $idle -and [bool]$p
     $ui.BtnPkgSign.IsEnabled = $idle -and [bool]$p
+    $ui.BtnPkgUpdate.IsEnabled = $idle -and [bool]$p
     $ui.BtnPkgPublish.IsEnabled = $idle -and [bool]$p -and $p.IsSigned
+    $ui.BtnPkgDoc.IsEnabled = [bool]($p -and (Get-MsixDocumentation -PackagePath $p.Path))
     if (-not $p) { $ui.PkgTitle.Text = 'Select a package'; $ui.PkgDetails.Text = ''; return }
-    $ui.PkgTitle.Text = $p.DisplayName
+    $ui.PkgTitle.Text = "$($p.DisplayName) $($p.Version)"
     $ui.PkgDetails.Text = (@(
         "Identity   $($p.Name)"
         "Publisher  $($p.Publisher)"
@@ -578,7 +687,7 @@ function Show-TestResult($t) {
     $ui.TestCard.Visibility = 'Visible'
     $ok = $t.State -eq 'Succeeded'
     $ui.TestIcon.Text = if ($ok) { [char]0xE73E } else { [char]0xE783 }
-    $ui.TestIcon.Foreground = if ($ok) { Get-Brush 'Ok' } else { Get-Brush 'Bad' }
+    $ui.TestIcon.Foreground = if ($ok) { Get-Brush 'Success' } else { Get-Brush 'Danger' }
     $ui.TestMessage.Text = $t.Message
     $script:Shots = @($t.Screenshots)
     $script:ShotIndex = 0
@@ -608,10 +717,36 @@ Add-Click $ui.BtnPkgAdd {
 Add-Click $ui.BtnPkgTest {
     $p = $ui.PackageList.SelectedItem.Tag
     if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first.' }
-    Start-UiTask -Title "Testing $($p.DisplayName)" -Arguments @{ Path = $p.Path } -Work { param($Path) Test-MsixPackage -Path $Path } -OnDone {
+    Start-UiTask -Title "Testing $($p.DisplayName)" -Arguments @{ Path = $p.Path } -Work {
+        param($Path)
+        $t = Test-MsixPackage -Path $Path
+        # Documentation again with the test result (keeps the job of the original build if known)
+        $doc = Get-MsixDocumentation -PackagePath $Path
+        $jobPath = $null
+        if ($doc) {
+            $m = [regex]::Match((Get-Content $doc -Raw), 'job folder <code>([^<]+)</code>')
+            if ($m.Success) { $jobPath = [System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value) }
+        }
+        New-MsixDocumentation -PackagePath $Path -JobPath $jobPath -TestResult $t | Out-Null
+        $t
+    } -OnDone {
         param($result, $err)
-        if (-not $err -and $result) { Show-TestResult $result[-1] }
+        if (-not $err -and $result) { Show-TestResult $result[-1]; Update-PackageButtons }
     }
+}
+Add-Click $ui.BtnPkgUpdate {
+    $p = $ui.PackageList.SelectedItem.Tag
+    Assert-ReadyForSandbox
+    $dlg = New-Object Microsoft.Win32.OpenFileDialog
+    $dlg.Title = "Update installer for $($p.DisplayName) (optional: Cancel to update with the app's own updater)"
+    $dlg.Filter = 'Installers (*.msi;*.exe)|*.msi;*.exe|All files (*.*)|*.*'
+    $params = @{ BasePackage = $p.Path }
+    if ($dlg.ShowDialog($window)) { $params.InstallerPath = $dlg.FileName }
+    Start-Recording -Parameters $params -Title "Updating $($p.DisplayName): Start recording in the sandbox, run the updates, Stop recording"
+}
+Add-Click $ui.BtnPkgDoc {
+    $doc = Get-MsixDocumentation -PackagePath $ui.PackageList.SelectedItem.Tag.Path
+    if ($doc) { Start-Process $doc }
 }
 Add-Click $ui.BtnPkgSign {
     $p = $ui.PackageList.SelectedItem.Tag
@@ -675,9 +810,9 @@ Add-Click $ui.BtnCertImport {
 Add-Click $ui.BtnCertKv {
     if (-not $ui.TxtKvVault.Text -or -not $ui.TxtKvCert.Text) { throw 'Enter vault and certificate name.' }
     if (-not $ui.PwdKv.Password) { throw 'Enter a password for the local PFX copy.' }
-    # Runs on the UI thread: Connect-AzAccount may need an interactive sign-in.
+    # Connect-AzAccount may need an interactive sign-in: in front of the tool, like the Graph sign-in.
     $window.Cursor = 'Wait'
-    try { Import-MsixCertificateFromKeyVault -VaultName $ui.TxtKvVault.Text -CertificateName $ui.TxtKvCert.Text -Password $ui.PwdKv.SecurePassword | Out-Null }
+    try { Invoke-InteractiveSignIn { Import-MsixCertificateFromKeyVault -VaultName $ui.TxtKvVault.Text -CertificateName $ui.TxtKvCert.Text -Password $ui.PwdKv.SecurePassword | Out-Null } }
     finally { $window.Cursor = $null }
     $ui.PwdKv.Clear()
     Update-CertificateView
@@ -696,21 +831,28 @@ Add-Click $ui.BtnCertIntune {
 $script:SelectedGroupId = $null
 function Get-Intent { if ($ui.IntentAvailable.IsChecked) { 'available' } else { 'required' } }
 
+function Connect-Intune {
+    $window.Cursor = 'Wait'
+    try {
+        $tenant = $ui.TxtTenantId.Text.Trim()
+        Invoke-InteractiveSignIn { Connect-MsixIntune -TenantId $tenant | Out-Null }
+    }
+    finally { $window.Cursor = $null }
+    Update-ConnectionStatus
+    Update-IntuneView
+    Update-Dashboard
+}
+
 function Update-IntuneView {
     $c = Get-MsixIntuneContext
-    $ui.IntuneAccount.Text = if ($c) { $c.Account } else { 'Not signed in' }
-    $ui.IntuneTenant.Text = if ($c) { "Tenant $($c.TenantId)" } else { 'Sign in to publish apps and the certificate profile.' }
-    $ui.BtnIntuneSignIn.Visibility = if ($c) { 'Collapsed' } else { 'Visible' }
-    $ui.TxtTenant.Visibility = if ($c) { 'Collapsed' } else { 'Visible' }
-    $ui.BtnIntuneSignOut.Visibility = if ($c) { 'Visible' } else { 'Collapsed' }
+    $ui.IntuneAccount.Text = if ($c -and $c.Account) { $c.Account } else { 'Not signed in' }
+    $ui.IntuneTenant.Text = if ($c -and $c.Account) { "Tenant $($c.TenantId)" } else { 'Sign in to publish apps and the certificate profile.' }
+    $ui.BtnIntunePageSignIn.IsEnabled = -not ($c -and $c.Account)
+    Update-ConnectionStatus
 }
-Add-Click $ui.BtnIntuneSignIn {
-    $window.Cursor = 'Wait'
-    try { Connect-MsixIntune -TenantId $ui.TxtTenant.Text.Trim() | Out-Null }
-    finally { $window.Cursor = $null }
-    Update-IntuneView
-}
-Add-Click $ui.BtnIntuneSignOut { Disconnect-MsixIntune; Update-IntuneView }
+Add-Click $ui.BtnIntuneSignIn { Connect-Intune }
+Add-Click $ui.BtnIntunePageSignIn { Connect-Intune }
+Add-Click $ui.BtnIntuneSignOut { Disconnect-MsixIntune; Update-IntuneView; Update-Dashboard }
 Add-Click $ui.BtnGroupSearch {
     if (-not (Get-MsixIntuneContext)) { throw 'Sign in first.' }
     if (-not $ui.TxtGroupSearch.Text.Trim()) { throw 'Enter the beginning of a group name.' }
@@ -721,7 +863,7 @@ Add-Click $ui.BtnGroupSearch {
         $item.Tag = $g
         [void]$ui.GroupList.Items.Add($item)
     }
-    if (-not $ui.GroupList.Items.Count) { Add-LogLine ('{0:HH:mm:ss}  No group found.' -f (Get-Date)) 'Warning' }
+    if (-not $ui.GroupList.Items.Count) { Write-UiLog 'No group found.' 'Warning' }
 }
 $ui.GroupList.Add_SelectionChanged({
     if ($ui.GroupList.SelectedItem) {
@@ -758,7 +900,7 @@ Add-Click $ui.BtnSettingsSave {
         SandboxVGpu         = [bool]$ui.SetVGpu.IsChecked
         PackageNetworking   = [bool]$ui.SetNetworking.IsChecked
     } | Out-Null
-    Add-LogLine ('{0:HH:mm:ss}  Settings saved.' -f (Get-Date)) 'Success'
+    Write-UiLog 'Settings saved.' 'Success'
 }
 Add-Click $ui.BtnToolchainUpdate { Invoke-ToolchainUpdate $false }
 Add-Click $ui.BtnToolchainForce { Invoke-ToolchainUpdate $true }
@@ -782,11 +924,12 @@ $window.Add_Closing({
 })
 $window.Add_Closed({ $timer.Stop(); [System.Windows.Application]::Current.Shutdown() })
 
-Add-LogLine ('{0:HH:mm:ss}  Workspace: {1}' -f (Get-Date), (Get-MsixWorkspace).Root)
+Write-UiLog "MSIX Sandbox Studio $script:Version started. Workspace: $((Get-MsixWorkspace).Root)"
 Show-Page 'Dashboard'
 Clear-RecipeForm
 $timer.Start()
 # Test hook: MSIXSTUDIO_SMOKE names a script that drives the window off-screen and renders every page.
 if ($env:MSIXSTUDIO_SMOKE) { . $env:MSIXSTUDIO_SMOKE }
 $window.Show()
+[void]$window.Activate()
 [void][System.Windows.Application]::Current.Run()

@@ -1,6 +1,6 @@
 @{
     RootModule        = 'MsixSandboxStudio.psm1'
-    ModuleVersion     = '2.0.0'
+    ModuleVersion     = '2.1.0'
     GUID              = '5d0f4f3e-8a51-4d55-9b0e-2f6c1b7a9e41'
     Author            = 'Lucas Dominguez'
     Description       = 'Repackage installers to MSIX in disposable Windows Sandboxes, sign on the host, test in a clean sandbox and publish to Intune.'
@@ -18,6 +18,8 @@
         'Test-MsixSandboxAvailable', 'Test-MsixSandboxRunning', 'New-MsixSandboxConfig', 'Start-MsixSandbox', 'Start-MsixRecording', 'Invoke-MsixPackaging', 'Test-MsixPackage', 'Invoke-MsixPipeline'
         # Signing
         'Get-MsixPackageInfo', 'Invoke-MsixSigning'
+        # Documentation
+        'New-MsixDocumentation', 'Get-MsixDocumentation', 'Get-MsixPackageContent'
         # Intune
         'Connect-MsixIntune', 'Disconnect-MsixIntune', 'Get-MsixIntuneContext', 'Publish-MsixToIntune', 'Set-MsixIntuneAssignment', 'Find-MsixIntuneGroup', 'Publish-MsixCertificateToIntune', 'Get-MsixPublisherHash'
     )

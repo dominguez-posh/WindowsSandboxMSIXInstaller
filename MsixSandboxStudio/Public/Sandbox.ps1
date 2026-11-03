@@ -1,7 +1,8 @@
 # Windows Sandbox orchestration. Every run gets a job folder on the host that is mapped into the
 # sandbox; Sandbox\Bootstrap.ps1 reads job.json there, does the work and reports back via status.json.
 
-$script:SandboxRoot = 'C:\MsixStudio'
+$script:SandboxRoot = 'C:\MsixStudio'        # mapped host folders inside the sandbox
+$script:SandboxLocal = 'C:\MsixStudioLocal'  # local working copy inside the sandbox
 
 function Test-MsixSandboxAvailable {
     <# True if the Windows Sandbox feature is enabled on this host. #>
@@ -195,10 +196,11 @@ function Invoke-MsixPackaging {
         PackageFile = $msixName
     }
     Copy-Item -LiteralPath $recipe.Installer -Destination (Join-Path $job "input\$installerName")
+    # Paths in the sandbox's local copy (Bootstrap.ps1 copies input there; the tool cannot use mapped folders)
     $template = New-MsixConversionTemplate -Recipe $recipe -Publisher $publisher `
-        -InstallerPath "$script:SandboxRoot\Job\input\$installerName" `
-        -PackagePath "$script:SandboxRoot\Job\out\$msixName" `
-        -TemplatePath "$script:SandboxRoot\Job\out\template.xml"
+        -InstallerPath "$script:SandboxLocal\input\$installerName" `
+        -PackagePath "$script:SandboxLocal\out\$msixName" `
+        -TemplatePath "$script:SandboxLocal\out\template.xml"
     [IO.File]::WriteAllText((Join-Path $job 'template.xml'), $template, (New-Object Text.UTF8Encoding $false))
 
     Write-MsixLog "Packaging $($recipe.DisplayName) $($recipe.Version) in a fresh sandbox ..."
@@ -214,8 +216,9 @@ function Invoke-MsixPackaging {
     $target = Join-Path (Get-MsixWorkspace).Output $msixName
     Copy-Item $raw $target -Force
     if (-not $SkipSigning) { Invoke-MsixSigning -Path $target | Out-Null }
+    $doc = New-MsixDocumentation -PackagePath $target -JobPath $job
     Write-MsixLog "Package ready: $target" -Level Success
-    [pscustomobject]@{ State = 'Succeeded'; Message = $status.Message; PackagePath = $target; JobPath = $job }
+    [pscustomobject]@{ State = 'Succeeded'; Message = $status.Message; PackagePath = $target; JobPath = $job; Documentation = $doc }
 }
 
 function Start-MsixRecording {
@@ -227,13 +230,19 @@ function Start-MsixRecording {
     .DESCRIPTION
     Package details (name, version, publisher display name) are prefilled from the recipe or the parameters
     and can still be changed in the recorder. The values used are saved as a manual recipe afterwards.
+    Every click is documented with a screenshot and the screen is recorded; the HTML documentation is
+    written next to the package.
+    .PARAMETER BasePackage
+    Update an existing package: its content is restored in the sandbox (files, registry, shortcuts) when the
+    recording starts, then you run the updates. Identity is taken from it, the version is raised by one.
     .OUTPUTS
-    Object with State, PackagePath, JobPath and Recipe.
+    Object with State, PackagePath, JobPath, Recipe and Documentation.
     #>
     [CmdletBinding()]
     param(
         [string]$RecipeName,
         [string]$InstallerPath,
+        [string]$BasePackage,
         [string]$DisplayName = '',
         [string]$PackageName = '',
         [string]$Version = '1.0.0.0',
@@ -241,6 +250,18 @@ function Start-MsixRecording {
         [switch]$SkipSigning
     )
     $settings = Get-MsixSettings
+    $base = $null
+    if ($BasePackage) {
+        $base = Get-MsixPackageInfo -Path $BasePackage
+        if (-not $DisplayName) { $DisplayName = $base.DisplayName }
+        if (-not $PackageName) { $PackageName = $base.Name }
+        if (-not $PublisherDisplayName) { $PublisherDisplayName = $base.PublisherDisplayName }
+        if ($Version -eq '1.0.0.0') {
+            # Next version: last part + 1 (an update must have a higher version)
+            $v = [version]$base.Version
+            $Version = '{0}.{1}.{2}.{3}' -f $v.Major, $v.Minor, $v.Build, [Math]::Min(65535, $v.Revision + 1)
+        }
+    }
     $recipe = $null
     if ($RecipeName) {
         $recipe = Get-MsixRecipe -Name $RecipeName
@@ -257,18 +278,34 @@ function Start-MsixRecording {
     $toolchain = Get-MsixToolchain
     if (-not ($toolchain -and $toolchain.IsComplete)) { $toolchain = Update-MsixToolchain }
 
-    $job = New-MsixJob -Mode Record -Name $(if ($PackageName) { $PackageName } else { 'recording' }) -Data @{
+    $publisher = if ($cert) { $cert.Subject } else { 'CN=Unsigned' }
+    if ($base -and $base.Publisher -ne $publisher) {
+        Write-MsixLog "The base package was published by '$($base.Publisher)'; the update gets '$publisher'. Devices treat it as a different app." -Level Warning
+    }
+    $data = @{
         AutoClose            = $false   # the recorder closes the sandbox
         DisplayName          = $DisplayName
         PackageName          = $PackageName
         Version              = ConvertTo-MsixVersion $Version
         PublisherDisplayName = $PublisherDisplayName
-        Publisher            = $(if ($cert) { $cert.Subject } else { 'CN=Unsigned' })
+        Publisher            = $publisher
+        InstallLocation      = $(if ($recipe -and $recipe.InstallLocation) { $recipe.InstallLocation } else { '' })
     }
+    if ($base) {
+        $data.BasePackage = Split-Path $base.Path -Leaf
+        $data.BaseDisplayName = $base.DisplayName
+        $data.BaseVersion = $base.Version
+    }
+    $job = New-MsixJob -Mode Record -Name $(if ($PackageName) { $PackageName } else { 'recording' }) -Data $data
     if ($InstallerPath) { Copy-Item -LiteralPath $InstallerPath -Destination (Join-Path $job 'input') }
+    if ($base) {
+        New-Item -ItemType Directory (Join-Path $job 'input\base') -Force | Out-Null
+        Copy-Item -LiteralPath $base.Path -Destination (Join-Path $job 'input\base')
+    }
     if ($cert -and (Test-Path $cert.CerPath)) { Copy-Item $cert.CerPath (Join-Path $job 'input\signing.cer') }
 
-    Write-MsixLog 'Opening the MSIX Recorder. In the sandbox: Start recording, install the app, Stop recording.'
+    if ($base) { Write-MsixLog "Opening the MSIX Recorder for an update of $($base.DisplayName) $($base.Version) -> $($data.Version)." }
+    else { Write-MsixLog 'Opening the MSIX Recorder. In the sandbox: Start recording, install the app, Stop recording.' }
     $wsb = New-MsixSandboxConfig -JobPath $job -Networking ([bool]$settings.PackageNetworking) -MemoryMB $settings.SandboxMemoryMB -VGpu $settings.SandboxVGpu
     Start-MsixSandboxProcess -WsbPath $wsb
     # Manual installs take as long as they take.
@@ -287,8 +324,9 @@ function Start-MsixRecording {
     # Keep what was entered in the recorder as a manual recipe, ready for the next version.
     $saved = Save-MsixRecipe -InstallMode Manual -InstallerPath $(if ($InstallerPath) { $InstallerPath } else { '' }) `
         -PackageName $r.PackageName -DisplayName $r.DisplayName -PublisherDisplayName $r.PublisherDisplayName -Version $r.Version
+    $doc = New-MsixDocumentation -PackagePath $target -JobPath $job
     Write-MsixLog "Package ready: $target" -Level Success
-    [pscustomobject]@{ State = 'Succeeded'; Message = $status.Message; PackagePath = $target; JobPath = $job; Recipe = $saved }
+    [pscustomobject]@{ State = 'Succeeded'; Message = $status.Message; PackagePath = $target; JobPath = $job; Recipe = $saved; Documentation = $doc }
 }
 
 function Test-MsixPackage {
@@ -344,9 +382,11 @@ function Invoke-MsixPipeline {
     )
     $built = Invoke-MsixPackaging -RecipeName $RecipeName
     if ($built.State -ne 'Succeeded') { return $built }
-    $result = [ordered]@{ State = 'Succeeded'; PackagePath = $built.PackagePath; Test = $null; IntuneApp = $null }
+    $result = [ordered]@{ State = 'Succeeded'; PackagePath = $built.PackagePath; Test = $null; IntuneApp = $null; Documentation = $built.Documentation }
     if (-not $SkipTest) {
         $result.Test = Test-MsixPackage -Path $built.PackagePath
+        # Documentation again, now with the test result and its screenshots
+        $result.Documentation = New-MsixDocumentation -PackagePath $built.PackagePath -JobPath $built.JobPath -TestResult $result.Test
         if ($result.Test.State -ne 'Succeeded') { $result.State = 'Failed'; return [pscustomobject]$result }
     }
     if ($Publish) { $result.IntuneApp = Publish-MsixToIntune -Path $built.PackagePath -GroupId $GroupId -Intent $Intent }

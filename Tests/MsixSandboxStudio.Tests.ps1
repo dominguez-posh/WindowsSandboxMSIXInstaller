@@ -175,6 +175,82 @@ Describe 'Recorder (sandbox side)' {
     }
 }
 
+Describe 'Update and documentation' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '..\MsixSandboxStudio\Sandbox\RecorderTemplate.ps1')
+        Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+        # A minimal .msix-like zip: manifest, VFS files (percent-encoded like real packages), root file, hive
+        $script:Pkg = Join-Path $script:TestRoot 'Contoso.Notes_3.2.0.0.msix'
+        $zip = [IO.Compression.ZipFile]::Open($script:Pkg, 'Create')
+        $manifest = @'
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
+  <Identity Name="Contoso.Notes" Publisher="CN=Contoso" Version="3.2.0.0" ProcessorArchitecture="x64"/>
+  <Properties><DisplayName>Contoso Notes</DisplayName><PublisherDisplayName>Contoso</PublisherDisplayName><Logo>Assets\logo.png</Logo></Properties>
+  <Capabilities><rescap:Capability Name="runFullTrust"/></Capabilities>
+  <Applications><Application Id="NOTES" Executable="VFS\ProgramFilesX64\Contoso Notes\notes.exe" EntryPoint="Windows.FullTrustApplication">
+    <uap:VisualElements DisplayName="Contoso Notes" Description="Notes" BackgroundColor="transparent" Square150x150Logo="Assets\logo.png" Square44x44Logo="Assets\logo.png"/>
+  </Application></Applications>
+</Package>
+'@
+        $entries = [ordered]@{
+            'AppxManifest.xml'                              = $manifest
+            'AppxBlockMap.xml'                              = '<x/>'
+            'Assets/logo.png'                               = 'png'
+            'Registry.dat'                                  = 'hive'
+            'VFS/ProgramFilesX64/Contoso%20Notes/notes.exe' = 'exe'
+            'VFS/Common%20AppData/Contoso/notes.ini'        = 'ini'
+            'VFS/UnknownRoot/x.txt'                         = 'x'
+            'readme.txt'                                    = 'root file'
+        }
+        foreach ($k in $entries.Keys) {
+            $w = New-Object IO.StreamWriter(($zip.CreateEntry($k)).Open())
+            $w.Write($entries[$k]); $w.Dispose()
+        }
+        $zip.Dispose()
+    }
+    It 'maps package entries to classic install locations' {
+        $plan = @(Get-MsixRestorePlan -Path $script:Pkg -InstallRoot 'C:\Program Files\Contoso.Notes')
+        ($plan | Where-Object Name -eq 'VFS/ProgramFilesX64/Contoso Notes/notes.exe').Target | Should -Be (Join-Path $env:ProgramFiles 'Contoso Notes\notes.exe')
+        ($plan | Where-Object Name -eq 'VFS/Common AppData/Contoso/notes.ini').Target | Should -Be (Join-Path $env:ProgramData 'Contoso\notes.ini')
+        ($plan | Where-Object Name -eq 'readme.txt').Target | Should -Be 'C:\Program Files\Contoso.Notes\readme.txt'
+        ($plan | Where-Object Name -eq 'Registry.dat').Kind | Should -Be 'MachineHive'
+        foreach ($skip in 'AppxManifest.xml', 'AppxBlockMap.xml', 'Assets/logo.png', 'VFS/UnknownRoot/x.txt') {
+            ($plan | Where-Object Name -eq $skip).Kind | Should -Be 'Skip'
+        }
+    }
+    It 'lists the package content by area' {
+        $content = @(Get-MsixPackageContent -Path $script:Pkg)
+        ($content | Where-Object Path -eq 'VFS\ProgramFilesX64\Contoso Notes\notes.exe').Area | Should -Be 'VFS\ProgramFilesX64'
+        $content.Path | Should -Not -Contain 'AppxBlockMap.xml'
+    }
+    It 'writes the documentation with every documented click' {
+        $job = Join-Path $script:TestRoot 'job-record'
+        New-Item -ItemType Directory "$job\input", "$job\out\doc\steps", "$job\out\doc\frames" -Force | Out-Null
+        @{ Id = 'job-record'; Mode = 'Record'; DisplayName = 'Contoso Notes' } | ConvertTo-Json | Set-Content "$job\job.json"
+        "[Running] Installing MSIX Packaging Tool`n[Running] Ready" | Set-Content "$job\out\bootstrap.log"
+        'img' | Set-Content "$job\out\doc\steps\step-001.jpg"
+        'img' | Set-Content "$job\out\doc\frames\frame-00001.jpg"
+        @(@{ Index = 1; Seconds = 4.5; Time = '10:00:04'; Button = 'Left'; X = 1; Y = 2; Window = 'Setup <Contoso>'; Process = 'setup'; Element = 'Next'; ElementType = 'button'; Image = 'steps/step-001.jpg' }) |
+            ConvertTo-Json | Set-Content "$job\out\doc\steps.json"
+        @(@{ Seconds = 1; Image = 'frames/frame-00001.jpg' }) | ConvertTo-Json | Set-Content "$job\out\doc\frames.json"
+        @{ Started = '2026-11-04T10:00:00'; Stopped = '2026-11-04T10:01:00'; Clicks = 1; Frames = 1; AutoStarted = $true; Screen = '1920x1080'; RestoreLog = @() } |
+            ConvertTo-Json | Set-Content "$job\out\doc\session.json"
+        $index = New-MsixDocumentation -PackagePath $script:Pkg -JobPath $job
+        $html = Get-Content $index -Raw
+        $html | Should -Match 'Recorded manual installation'
+        $html | Should -Match 'button <b>&ldquo;Next&rdquo;</b>'
+        $html | Should -Match 'Setup &lt;Contoso&gt;'          # window titles are HTML-encoded
+        $html | Should -Match 'notes\.exe'                      # file list
+        Test-Path (Join-Path (Split-Path $index) 'steps\step-001.jpg') | Should -BeTrue
+        Get-MsixDocumentation -PackagePath $script:Pkg | Should -Be $index
+    }
+    It 'compiles the click recorder' {
+        { Add-Type -Path (Join-Path $PSScriptRoot '..\MsixSandboxStudio\Sandbox\ClickRecorder.cs') -ReferencedAssemblies System.Drawing, System.Windows.Forms, UIAutomationClient, UIAutomationTypes, WindowsBase } |
+            Should -Not -Throw
+    }
+}
+
 Describe 'Intune content encryption' {
     It 'produces HMAC + IV + ciphertext that decrypts to the original' {
         $src = Join-Path $script:TestRoot 'plain.bin'
