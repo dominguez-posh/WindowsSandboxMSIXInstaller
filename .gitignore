@@ -1,0 +1,8 @@
+# Local state of MSIX Sandbox Studio: recipes, installers, jobs, packages, certificates
+Workspace/
+settings.json
+
+# Never commit signing keys
+*.pfx
+*.p12
+*.pwd
