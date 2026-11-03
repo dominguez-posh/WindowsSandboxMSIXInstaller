@@ -1,119 +1,116 @@
-# Windows Sandbox MSIX Installer
+# MSIX Sandbox Studio
 
-A PowerShell script that turns a fresh **Windows Sandbox** into a disposable
-MSIX packaging workstation: it installs the **MSIX Packaging Tool** (offline,
-with its license and driver) and optionally creates a self-signed
-code-signing certificate for the packages you build.
+Repackage classic installers (MSI/EXE) into **signed, tested MSIX packages**, using a fresh
+**Windows Sandbox** for every run, and publish them to **Microsoft Intune**. Comes as a
+PowerShell module plus a desktop GUI.
 
-Because Windows Sandbox is thrown away when it closes, every repackaging run
-starts from a clean Windows image. That is exactly what the MSIX Packaging
-Tool wants: a machine with nothing else installed, so that the captured
-package contains only the application you are converting.
+![Dashboard](docs/images/dashboard.png)
 
-Typical use: convert classic installers (MSI/EXE) into MSIX packages and
-distribute them with Microsoft Intune.
+## Why a sandbox?
+
+The MSIX Packaging Tool records everything that changes on the machine while an installer runs.
+On your own workstation that capture picks up noise, and the installed app stays behind afterwards.
+Windows Sandbox gives you a clean Windows image that is thrown away when it closes, so every capture
+starts from the same state and nothing is left on the host.
+
+## Features
+
+| Step | What happens |
+|------|--------------|
+| **Toolchain** | Downloads the MSIX Packaging Tool (offline bundle + license), its driver and the Windows SDK signing tools **once** to the host, with SHA256 hashes. Mapped read-only into every sandbox: no download per run, and it works without network. Checks Microsoft Learn for newer versions. |
+| **Recipes** | One JSON recipe per app: installer, silent arguments, package identity. Detects MSI properties and common EXE setup frameworks (Inno Setup, NSIS, WiX Burn, InstallShield, Advanced Installer, Squirrel) and suggests silent arguments. |
+| **Package** | Generates a Packaging Tool conversion template and runs the conversion **unattended** in a new sandbox, which closes itself when done. Logs land in the job folder. |
+| **Sign** | Signs on the **host** with signtool (SHA256 + RFC 3161 timestamp). The private key never enters a sandbox. |
+| **Test** | Installs the package in a second fresh sandbox (certificate trusted, network off), starts every app, takes screenshots and uninstalls it again. |
+| **Intune** | Uploads the package as a line-of-business app via Microsoft Graph (new app or new version of an existing one) and assigns it to a group. It can also create the trusted-certificate profile, so devices trust your packages. |
+| **Interactive** | Opens a sandbox with the Packaging Tool installed and a shared folder, for apps that need manual steps. |
 
 ## Requirements
 
-- Windows 10/11 Pro, Enterprise or Education (Windows Sandbox is not
-  available on Home)
-- Virtualization enabled in the BIOS/UEFI
-- The Windows Sandbox feature enabled on the host (one-time, needs a reboot):
+- Windows 10/11 Pro, Enterprise or Education with virtualization enabled
+- Windows Sandbox feature enabled (the dashboard can do this for you; needs a reboot)
+- Windows PowerShell 5.1 (included in Windows) or PowerShell 7
+- For Intune: `Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`, an account allowed to manage Intune apps
+- Optional, for certificates from Azure Key Vault: `Install-Module Az.KeyVault -Scope CurrentUser`
 
-  ```powershell
-  Enable-WindowsOptionalFeature -FeatureName "Containers-DisposableClientVM" -All -Online
-  ```
+## Quick start (GUI)
 
-- Internet access inside the sandbox (enabled by default)
+1. Double-click **`Start.cmd`**.
+2. **Dashboard**: fix anything that is not green. The toolchain downloads on first use (about 60 MB).
+3. **Certificate**: create a self-signed code-signing certificate, or import a PFX from your CA or Key Vault.
+   Its subject (for example `CN=Contoso Packaging`) becomes the publisher of every package.
+4. **Recipes**: drop an `.msi` or `.exe` on the window, check the suggested values and click
+   **Package + sign + test**.
+5. **Packages**: see the test result and screenshots, then click **Publish to Intune**.
 
-## Usage
+Devices must trust the signing certificate. With a self-signed one, click **Trust via Intune**
+on the Certificate page once and assign the profile to the same devices.
 
-1. Start **Windows Sandbox** from the Start menu.
-2. Copy `install.ps1` into the sandbox (copy and paste works between host and
-   sandbox).
-3. Open PowerShell **as Administrator** inside the sandbox and run:
+## Quick start (PowerShell)
 
-   ```powershell
-   Set-ExecutionPolicy -Scope Process Bypass -Force
-   .\install.ps1
-   ```
+```powershell
+Import-Module .\MsixSandboxStudio\MsixSandboxStudio.psd1
 
-4. Answer the prompt `Create New Password? (Y)` with `Y` if you need a new
-   signing certificate (see below). Any other answer skips that step.
-5. Start the **MSIX Packaging Tool** from the Start menu and package your
-   application.
-6. **Before closing the sandbox**, copy everything you want to keep (the
-   `.msix` package, the certificate files) back to the host. Everything left
-   inside the sandbox is gone when it closes.
+Update-MsixToolchain
+New-MsixCertificate -Subject 'CN=Contoso Packaging' -Password (Read-Host -AsSecureString 'PFX password')
 
-## What the script does
+Get-MsixInstallerInfo C:\Installers\notes-setup.exe          # suggests name, version, silent arguments
+Save-MsixRecipe -InstallerPath C:\Installers\notes-setup.exe -PackageName Contoso.Notes `
+    -DisplayName 'Contoso Notes' -Version 3.2.0 -Arguments '/VERYSILENT /NORESTART'
 
-| Step | Action |
-|------|--------|
-| 1 | Downloads the MSIX Packaging Tool bundle (`v1.2024.405.0`) to `C:\Temp` |
-| 2 | Downloads the matching offline license XML to `C:\Temp` |
-| 3 | Downloads the MSIX Packaging Tool driver (Feature on Demand `.cab`) to `C:\Temp` |
-| 4 | Installs the driver with `Add-WindowsPackage -Online` |
-| 5 | Provisions the Packaging Tool with `Add-AppxProvisionedPackage` and the offline license, so no Microsoft Store is needed |
-| 6 | Optional: creates a self-signed code-signing certificate and exports it to the Public Desktop |
+# Package -> sign -> test -> publish, stops at the first failing step
+Connect-MsixIntune
+Invoke-MsixPipeline -RecipeName Contoso.Notes -Publish -GroupId <entra-group-id> -Intent required
+```
 
-All downloads come directly from `download.microsoft.com`.
+Single steps: `Invoke-MsixPackaging`, `Invoke-MsixSigning`, `Test-MsixPackage`, `Publish-MsixToIntune`,
+`Publish-MsixCertificateToIntune`, `Start-MsixSandbox` (interactive). `Get-Help <command>` describes each.
 
-## Code-signing certificate
+## How it works
 
-MSIX packages must be signed, and the device installing them must trust the
-signing certificate. If you answer `Y`, the script:
+```
+Host                                          Windows Sandbox (fresh every run)
+--------------------------------------------  -------------------------------------------
+Workspace\Jobs\<job>\  ──(mapped, writable)──▶ C:\MsixStudio\Job         job.json, template.xml,
+                                                                         input\, out\, status.json
+Workspace\Toolchain\   ──(mapped, read-only)─▶ C:\MsixStudio\Toolchain   Packaging Tool, driver
+MsixSandboxStudio\Sandbox\ ─(read-only)──────▶ C:\MsixStudio\Tools       Bootstrap.ps1 (logon command)
+```
 
-- creates a self-signed certificate in `Cert:\CurrentUser\My` with
-  - Subject `CN=unique-projects`
-  - Enhanced Key Usage *Code Signing* (`1.3.6.1.5.5.7.3.3`)
-  - validity of 200 years
-- asks for a password and exports
-  - `NewCertificate.pfx` (private key, password protected) and
-  - `NewCertificatePubKey.cer` (public key only)
+1. The host writes a job folder (`job.json`, conversion template, installer copy) and a `.wsb` file.
+2. Windows Sandbox starts and runs `Bootstrap.ps1` as logon command. It installs what the job needs,
+   does the work and reports progress in `status.json`.
+3. The host follows `status.json`, picks up the results from `out\` and continues
+   (signing, the next test or upload). Package and test sandboxes shut themselves down.
 
-  to `C:\Users\Public\Desktop` in the sandbox.
+Everything local lives in `Workspace\` (gitignored): `Toolchain`, `Certificates`, `Recipes`,
+`Jobs` (one folder per run, with logs and screenshots), `Output` (signed packages) and `Shared`
+(mapped into the interactive sandbox). Settings are stored in `settings.json`.
 
-How to use the two files:
+## Security notes
 
-- **`.pfx`**: select it in the MSIX Packaging Tool under *Signing preference →
-  Sign with a certificate (.pfx)* and enter the password. Keep it safe; anyone
-  holding it can sign packages your devices will trust.
-- **`.cer`**: deploy it to your devices so they trust the packages, e.g. in
-  Intune via *Devices → Configuration → Create → Templates → Trusted
-  certificate*, store *Computer certificate store – Root* (or
-  *Trusted People*).
-- The **Publisher** you enter in the MSIX Packaging Tool must match the
-  certificate subject exactly (`CN=unique-projects`), otherwise signing fails.
+- The PFX and its password stay on the host. The password is stored with DPAPI
+  (`*.pwd`, readable only by your Windows account on this computer). Sandboxes only receive the public `.cer`.
+- `*.pfx`, `*.pwd` and the workspace are gitignored. Never commit signing keys.
+- The certificate that was committed to this repository before version 2.0 is public.
+  Do not trust it on any device; create your own instead.
+- The test sandbox runs without network access.
 
-To reuse an existing certificate in a new sandbox, skip the creation step and
-point the Packaging Tool at your saved `.pfx`. A certificate from a public or
-internal CA works the same way and needs no extra trust deployment if the CA
-is already trusted.
+## Limitations
 
-## Repository contents
+- Windows runs only one sandbox at a time, so jobs run one after another.
+- Installers that need user interaction cannot be converted unattended. Use the interactive sandbox for them.
+- Intune upload covers single `.msix` packages (no bundles or dependencies yet).
+- Assigning an app replaces its existing assignments.
 
-| File | Purpose |
-|------|---------|
-| `install.ps1` | The installer script described above |
-| `NewCertificate.pfx` | Example certificate (private key) created by the script |
-| `NewCertificatePubKey.cer` | Public key of that example certificate |
+## Tests
 
-> **Security note:** the `.pfx` in this repository contains a private key and
-> is public. Do not use it to sign packages for production devices and do not
-> deploy its `.cer` as a trusted certificate. Create your own certificate with
-> the script instead.
+```powershell
+Invoke-Pester .\Tests      # Pester 5; offline, no sandbox or tenant needed
+```
 
-## Known limitations
+## Classic script
 
-- The Packaging Tool version and download URLs are pinned in the script.
-  When Microsoft publishes a new version, the URLs must be updated.
-- The script has to be run again in every new sandbox session.
-- The download step continues even if a download fails; check the output for
-  red error lines.
-- The final message mentions `C:\Temp\MSIXCert.pfx`; the files are actually
-  written to the Public Desktop.
-
-## License
-
-No license has been specified yet.
+`install.ps1` is the original one-shot script. Run it inside a manually started sandbox to install
+the Packaging Tool and optionally create a certificate. MSIX Sandbox Studio replaces it, but it is
+kept so that existing links keep working.
