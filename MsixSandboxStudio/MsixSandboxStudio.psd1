@@ -15,7 +15,7 @@
         # Recipes
         'Get-MsixInstallerInfo', 'Get-MsixRecipe', 'Save-MsixRecipe', 'Remove-MsixRecipe', 'New-MsixConversionTemplate', 'ConvertTo-MsixVersion', 'ConvertTo-MsixPackageName'
         # Sandbox
-        'Test-MsixSandboxAvailable', 'Test-MsixSandboxRunning', 'New-MsixSandboxConfig', 'Start-MsixSandbox', 'Invoke-MsixPackaging', 'Test-MsixPackage', 'Invoke-MsixPipeline'
+        'Test-MsixSandboxAvailable', 'Test-MsixSandboxRunning', 'New-MsixSandboxConfig', 'Start-MsixSandbox', 'Start-MsixRecording', 'Invoke-MsixPackaging', 'Test-MsixPackage', 'Invoke-MsixPipeline'
         # Signing
         'Get-MsixPackageInfo', 'Invoke-MsixSigning'
         # Intune

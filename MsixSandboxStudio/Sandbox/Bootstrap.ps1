@@ -1,8 +1,9 @@
 # Runs INSIDE Windows Sandbox as logon command. Reads C:\MsixStudio\Job\job.json, does the job
 # and reports progress/results to status.json in the same (host-mapped) folder.
 #   Interactive: install the MSIX Packaging Tool, trust the signing certificate, open the tool
-#   Package:     install the tool, run the conversion template, close the sandbox; unattended, or with
-#                job.Manual the "installer" is ManualCapture.ps1 and the user installs while it records
+#   Package:     install the tool, run the conversion template unattended, close the sandbox
+#   Record:      open the MSIX Recorder (Recorder.ps1), install the tool while it shows progress, then hand
+#                over: the user starts/stops the recording there and the recorder closes the sandbox
 #   Test:        trust the certificate, install the package, start each app, screenshot, uninstall, close
 
 $ErrorActionPreference = 'Stop'
@@ -94,10 +95,8 @@ try {
 
         'Package' {
             Install-PackagingTool | Out-Null
-            # No status writes from here until the tool is done: the recording window and the
-            # silent installer run while the Packaging Tool captures changes.
-            if ($job.Manual) { Set-JobStatus Running 'Recording - install the app in the sandbox, then click Finish recording' }
-            else { Set-JobStatus Running "Converting $($job.Installer)" }
+            # No status writes from here until the tool is done: the installer runs while the tool captures.
+            Set-JobStatus Running "Converting $($job.Installer)"
             # App execution alias, created when the tool is registered for the user.
             $cli = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\MsixPackagingTool.exe'
             if (-not (Test-Path $cli)) { throw "MSIX Packaging Tool command line not found ($cli)." }
@@ -115,12 +114,19 @@ try {
             if (Test-Path $msix) {
                 Set-JobStatus Succeeded 'Done' "Package created ($([math]::Round((Get-Item $msix).Length / 1MB, 1)) MB)."
             }
-            elseif ($job.Manual -and $exit -ne 0) {
-                Set-JobStatus Failed 'Recording' "Recording cancelled or conversion failed (exit code $exit). See conversion.log."
-            }
             else {
                 Set-JobStatus Failed 'Conversion' "No package was created (exit code $exit). See conversion.log."
             }
+        }
+
+        'Record' {
+            # The recorder shows the progress below (it reads status.json) and takes over once 'Ready'.
+            Start-Process powershell.exe -ArgumentList '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "$PSScriptRoot\Recorder.ps1"
+            Import-SigningCertificate
+            Install-PackagingTool | Out-Null
+            # Logs first: once 'Ready' is out, the user may start recording and the job folder must stay untouched.
+            Save-Logs
+            Set-JobStatus Running 'Ready'
         }
 
         'Test' {
@@ -177,7 +183,9 @@ try {
 }
 catch {
     Set-JobStatus Failed 'Error' $_.Exception.Message
+    if ($job.Mode -eq 'Record') { Save-Logs }
 }
 finally {
-    Close-Sandbox
+    # In Record mode the recorder owns the sandbox from 'Ready' on (no more writes here); it closes it itself.
+    if ($job.Mode -ne 'Record') { Close-Sandbox }
 }

@@ -92,7 +92,7 @@ $folders
 
 function New-MsixJob {
     # Creates a job folder with job.json; returns its path.
-    param([Parameter(Mandatory)][ValidateSet('Interactive', 'Package', 'Test')][string]$Mode, [string]$Name = 'sandbox', [hashtable]$Data = @{})
+    param([Parameter(Mandatory)][ValidateSet('Interactive', 'Package', 'Record', 'Test')][string]$Mode, [string]$Name = 'sandbox', [hashtable]$Data = @{})
     $id = '{0:yyyyMMdd-HHmmss}-{1}-{2}' -f (Get-Date), $Mode.ToLower(), ($Name -replace '[^\w\.-]', '_')
     $path = Join-Path (Get-MsixWorkspace).Jobs $id
     New-Item -ItemType Directory -Path (Join-Path $path 'input'), (Join-Path $path 'out') -Force | Out-Null
@@ -164,8 +164,7 @@ function Invoke-MsixPackaging {
     Repackages a recipe in a fresh sandbox and signs the result on the host.
     .DESCRIPTION
     InstallMode Silent: the installer runs unattended with the recipe's arguments.
-    InstallMode Manual: the sandbox shows a recording window; you install and configure the app yourself
-    (the recipe's installer, if any, is ready in the sandbox) and click "Finish recording" to build the package.
+    InstallMode Manual: opens the MSIX Recorder (see Start-MsixRecording).
     .OUTPUTS
     Object with State, PackagePath (signed .msix in Workspace\Output) and JobPath.
     #>
@@ -177,10 +176,9 @@ function Invoke-MsixPackaging {
     $settings = Get-MsixSettings
     $recipe = Get-MsixRecipe -Name $RecipeName
     if (-not $recipe) { throw "Recipe not found: $RecipeName" }
-    $manual = $recipe.InstallMode -eq 'Manual'
-    $hasInstaller = [bool]$recipe.Installer
-    if ($hasInstaller -and -not (Test-Path $recipe.Installer)) { throw "Installer missing: $($recipe.Installer)" }
-    if (-not $manual -and -not $hasInstaller) { throw 'Silent packaging needs an installer; choose one or switch the recipe to manual recording.' }
+    if ($recipe.InstallMode -eq 'Manual') { return Start-MsixRecording -RecipeName $RecipeName -SkipSigning:$SkipSigning }
+    if (-not $recipe.Installer) { throw 'Silent packaging needs an installer; choose one or switch the recipe to manual recording.' }
+    if (-not (Test-Path $recipe.Installer)) { throw "Installer missing: $($recipe.Installer)" }
     $cert = Get-MsixCertificate
     if (-not $cert -and -not $SkipSigning) { throw 'No signing certificate configured (New-MsixCertificate or Import-MsixCertificate).' }
     $toolchain = Get-MsixToolchain
@@ -188,46 +186,25 @@ function Invoke-MsixPackaging {
 
     # Publisher must match the certificate subject exactly, otherwise signing fails.
     $publisher = if ($cert) { $cert.Subject } else { 'CN=Unsigned' }
-    $installerName = if ($hasInstaller) { Split-Path $recipe.Installer -Leaf } else { '' }
+    $installerName = Split-Path $recipe.Installer -Leaf
     $msixName = '{0}_{1}.msix' -f $recipe.PackageName, $recipe.Version
     $job = New-MsixJob -Mode Package -Name $recipe.PackageName -Data @{
         AutoClose   = $true
         PackageName = $recipe.PackageName
-        DisplayName = $recipe.DisplayName
         Installer   = $installerName
         PackageFile = $msixName
-        Manual      = $manual
     }
-    if ($hasInstaller) { Copy-Item -LiteralPath $recipe.Installer -Destination (Join-Path $job "input\$installerName") }
-
-    $templateArgs = @{
-        Recipe       = $recipe
-        Publisher    = $publisher
-        PackagePath  = "$script:SandboxRoot\Job\out\$msixName"
-        TemplatePath = "$script:SandboxRoot\Job\out\template.xml"
-    }
-    if ($manual) {
-        # The "installer" is the recording window: the Packaging Tool captures every change made while it is open.
-        $templateArgs.InstallerPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-        $templateArgs.InstallerArguments = "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File $script:SandboxRoot\Tools\ManualCapture.ps1"
-    }
-    else {
-        $templateArgs.InstallerPath = "$script:SandboxRoot\Job\input\$installerName"
-    }
-    $template = New-MsixConversionTemplate @templateArgs
+    Copy-Item -LiteralPath $recipe.Installer -Destination (Join-Path $job "input\$installerName")
+    $template = New-MsixConversionTemplate -Recipe $recipe -Publisher $publisher `
+        -InstallerPath "$script:SandboxRoot\Job\input\$installerName" `
+        -PackagePath "$script:SandboxRoot\Job\out\$msixName" `
+        -TemplatePath "$script:SandboxRoot\Job\out\template.xml"
     [IO.File]::WriteAllText((Join-Path $job 'template.xml'), $template, (New-Object Text.UTF8Encoding $false))
 
-    if ($manual) {
-        Write-MsixLog "Recording $($recipe.DisplayName) $($recipe.Version): install the app in the sandbox, then click 'Finish recording' there."
-    }
-    else {
-        Write-MsixLog "Packaging $($recipe.DisplayName) $($recipe.Version) in a fresh sandbox ..."
-    }
+    Write-MsixLog "Packaging $($recipe.DisplayName) $($recipe.Version) in a fresh sandbox ..."
     $wsb = New-MsixSandboxConfig -JobPath $job -Networking ([bool]$settings.PackageNetworking) -MemoryMB $settings.SandboxMemoryMB -VGpu $settings.SandboxVGpu
     Start-MsixSandboxProcess -WsbPath $wsb
-    # Manual installs take as long as they take: allow at least 4 hours.
-    $timeout = if ($manual) { [Math]::Max(240, [int]$settings.JobTimeoutMinutes) } else { $settings.JobTimeoutMinutes }
-    $status = Wait-MsixJob -JobPath $job -TimeoutMinutes $timeout
+    $status = Wait-MsixJob -JobPath $job -TimeoutMinutes $settings.JobTimeoutMinutes
 
     $raw = Join-Path $job "out\$msixName"
     if ($status.State -ne 'Succeeded' -or -not (Test-Path $raw)) {
@@ -239,6 +216,79 @@ function Invoke-MsixPackaging {
     if (-not $SkipSigning) { Invoke-MsixSigning -Path $target | Out-Null }
     Write-MsixLog "Package ready: $target" -Level Success
     [pscustomobject]@{ State = 'Succeeded'; Message = $status.Message; PackagePath = $target; JobPath = $job }
+}
+
+function Start-MsixRecording {
+    <#
+    .SYNOPSIS
+    Records a manual installation: opens a sandbox with the MSIX Recorder, where everything is installed
+    automatically. You click "Start recording", install the app (the installer starts by itself),
+    click "Stop recording"; the package comes back to the host and is signed.
+    .DESCRIPTION
+    Package details (name, version, publisher display name) are prefilled from the recipe or the parameters
+    and can still be changed in the recorder. The values used are saved as a manual recipe afterwards.
+    .OUTPUTS
+    Object with State, PackagePath, JobPath and Recipe.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$RecipeName,
+        [string]$InstallerPath,
+        [string]$DisplayName = '',
+        [string]$PackageName = '',
+        [string]$Version = '1.0.0.0',
+        [string]$PublisherDisplayName = '',
+        [switch]$SkipSigning
+    )
+    $settings = Get-MsixSettings
+    $recipe = $null
+    if ($RecipeName) {
+        $recipe = Get-MsixRecipe -Name $RecipeName
+        if (-not $recipe) { throw "Recipe not found: $RecipeName" }
+        if (-not $InstallerPath) { $InstallerPath = $recipe.Installer }
+        if (-not $DisplayName) { $DisplayName = $recipe.DisplayName }
+        if (-not $PackageName) { $PackageName = $recipe.PackageName }
+        if ($Version -eq '1.0.0.0') { $Version = $recipe.Version }
+        if (-not $PublisherDisplayName) { $PublisherDisplayName = $recipe.PublisherDisplayName }
+    }
+    if ($InstallerPath -and -not (Test-Path -LiteralPath $InstallerPath)) { throw "Installer missing: $InstallerPath" }
+    $cert = Get-MsixCertificate
+    if (-not $cert -and -not $SkipSigning) { throw 'No signing certificate configured (New-MsixCertificate or Import-MsixCertificate).' }
+    $toolchain = Get-MsixToolchain
+    if (-not ($toolchain -and $toolchain.IsComplete)) { $toolchain = Update-MsixToolchain }
+
+    $job = New-MsixJob -Mode Record -Name $(if ($PackageName) { $PackageName } else { 'recording' }) -Data @{
+        AutoClose            = $false   # the recorder closes the sandbox
+        DisplayName          = $DisplayName
+        PackageName          = $PackageName
+        Version              = ConvertTo-MsixVersion $Version
+        PublisherDisplayName = $PublisherDisplayName
+        Publisher            = $(if ($cert) { $cert.Subject } else { 'CN=Unsigned' })
+    }
+    if ($InstallerPath) { Copy-Item -LiteralPath $InstallerPath -Destination (Join-Path $job 'input') }
+    if ($cert -and (Test-Path $cert.CerPath)) { Copy-Item $cert.CerPath (Join-Path $job 'input\signing.cer') }
+
+    Write-MsixLog 'Opening the MSIX Recorder. In the sandbox: Start recording, install the app, Stop recording.'
+    $wsb = New-MsixSandboxConfig -JobPath $job -Networking ([bool]$settings.PackageNetworking) -MemoryMB $settings.SandboxMemoryMB -VGpu $settings.SandboxVGpu
+    Start-MsixSandboxProcess -WsbPath $wsb
+    # Manual installs take as long as they take.
+    $status = Wait-MsixJob -JobPath $job -TimeoutMinutes ([Math]::Max(480, [int]$settings.JobTimeoutMinutes))
+
+    $r = $status.Result
+    $raw = if ($r -and $r.PackageFile) { Join-Path $job "out\$($r.PackageFile)" } else { $null }
+    if ($status.State -ne 'Succeeded' -or -not $raw -or -not (Test-Path $raw)) {
+        Write-MsixLog "Recording failed: $($status.Message) (logs: $job)" -Level Error
+        return [pscustomobject]@{ State = 'Failed'; Message = $status.Message; PackagePath = $null; JobPath = $job; Recipe = $null }
+    }
+    $target = Join-Path (Get-MsixWorkspace).Output $r.PackageFile
+    Copy-Item $raw $target -Force
+    if (-not $SkipSigning) { Invoke-MsixSigning -Path $target | Out-Null }
+
+    # Keep what was entered in the recorder as a manual recipe, ready for the next version.
+    $saved = Save-MsixRecipe -InstallMode Manual -InstallerPath $(if ($InstallerPath) { $InstallerPath } else { '' }) `
+        -PackageName $r.PackageName -DisplayName $r.DisplayName -PublisherDisplayName $r.PublisherDisplayName -Version $r.Version
+    Write-MsixLog "Package ready: $target" -Level Success
+    [pscustomobject]@{ State = 'Succeeded'; Message = $status.Message; PackagePath = $target; JobPath = $job; Recipe = $saved }
 }
 
 function Test-MsixPackage {

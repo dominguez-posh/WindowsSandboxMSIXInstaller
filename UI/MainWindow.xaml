@@ -64,7 +64,7 @@
                         <TextBlock x:Name="BusySpinner" Text="&#xE895;" Style="{StaticResource Icon}" Foreground="{StaticResource Accent2}" Margin="0,0,8,0" RenderTransformOrigin="0.5,0.5">
                             <TextBlock.RenderTransform><RotateTransform x:Name="SpinnerRotate" Angle="0"/></TextBlock.RenderTransform>
                         </TextBlock>
-                        <TextBlock x:Name="BusyText" Text="Working ..." FontSize="12"/>
+                        <TextBlock x:Name="BusyText" Text="Working ..." FontSize="12" MaxWidth="480" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -89,7 +89,9 @@
                                     <WrapPanel x:Name="PipelineChips"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="24,0,0,0">
-                                    <Button x:Name="BtnDashNewRecipe" Tag="&#xE710;" Content="New recipe" Margin="0,0,0,8"/>
+                                    <Button x:Name="BtnDashRecord" Tag="&#xE7C8;" Content="Record installation" Margin="0,0,0,8"
+                                            ToolTip="Opens the MSIX Recorder in a sandbox: Start recording, install the app, Stop recording"/>
+                                    <Button x:Name="BtnDashNewRecipe" Tag="&#xE710;" Content="New recipe" Style="{StaticResource Ghost}" Margin="0,0,0,8"/>
                                     <Button x:Name="BtnDashSandbox" Tag="&#xE7F4;" Content="Open sandbox" Style="{StaticResource Ghost}" Margin="0"/>
                                 </StackPanel>
                             </Grid>
@@ -165,7 +167,7 @@
                                     </StackPanel>
                                     <Border x:Name="ManualInfo" CornerRadius="8" Background="#1B2547" Padding="12,10" Margin="0,10,0,0" Visibility="Collapsed">
                                         <TextBlock Style="{StaticResource Hint}" Foreground="#C7D2FE"
-                                                   Text="A sandbox opens with the MSIX Packaging Tool recording. Install and configure the app yourself, then click 'Finish recording' in the small window there: the package is built, signed and copied back automatically."/>
+                                                   Text="A sandbox opens with the MSIX Recorder and installs everything by itself. Click 'Start recording' there (your installer starts automatically), install and configure the app, click 'Stop recording': the package is built, copied back and signed."/>
                                     </Border>
                                     <TextBlock x:Name="LblInstaller" Text="Installer (.msi / .exe)" Style="{StaticResource Label}"/>
                                     <DockPanel>

@@ -135,6 +135,46 @@ Describe 'Certificate' {
     }
 }
 
+Describe 'Recorder (sandbox side)' {
+    BeforeAll {
+        $script:SandboxDir = Join-Path $PSScriptRoot '..\MsixSandboxStudio\Sandbox'
+        . (Join-Path $script:SandboxDir 'RecorderTemplate.ps1')
+    }
+    It 'normalizes versions like the module' -ForEach @(
+        @{ In = '3'; Out = '3.0.0.0' }
+        @{ In = '1.2.3.4'; Out = '1.2.3.4' }
+        @{ In = '1.2.x'; Out = $null }
+        @{ In = '70000'; Out = $null }
+    ) {
+        ConvertTo-RecorderVersion $In | Should -Be $Out
+    }
+    It 'builds a template whose installer is the recording hold' {
+        $x = [xml](New-RecorderTemplate -PackageName 'Contoso.Notes' -DisplayName 'Contoso Notes' -PublisherName 'CN=Contoso' `
+            -PublisherDisplayName 'Contoso' -Version '3.2.0.0' -InstallerPath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
+            -InstallerArguments '-File RecordingHold.ps1' -PackagePath 'C:\MsixStudio\Job\out\Contoso.Notes_3.2.0.0.msix')
+        $ns = @{ t = 'http://schemas.microsoft.com/appx/msixpackagingtool/template/2018' }
+        (Select-Xml -Xml $x -XPath '//t:Installer' -Namespace $ns).Node.Arguments | Should -Be '-File RecordingHold.ps1'
+        (Select-Xml -Xml $x -XPath '//t:PackageInformation' -Namespace $ns).Node.PublisherName | Should -Be 'CN=Contoso'
+        (Select-Xml -Xml $x -XPath '//t:SaveLocation' -Namespace $ns).Node.PackagePath | Should -Match 'Contoso\.Notes_3\.2\.0\.0\.msix$'
+    }
+    It 'ends the hold process with <Code> on <Signal>' -ForEach @(
+        @{ Signal = 'Stop'; Code = 0 }
+        @{ Signal = 'Cancel'; Code = 1602 }
+    ) {
+        $stop = New-RecorderEvent 'MsixStudioStopRecording'
+        $cancel = New-RecorderEvent 'MsixStudioCancelRecording'
+        [void]$stop.Reset(); [void]$cancel.Reset()
+        $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $script:SandboxDir 'RecordingHold.ps1') -WindowStyle Hidden -PassThru
+        Start-Sleep -Seconds 3
+        $p.HasExited | Should -BeFalse   # waits while "recording"
+        if ($Signal -eq 'Stop') { [void]$stop.Set() } else { [void]$cancel.Set() }
+        $p.WaitForExit(15000) | Should -BeTrue
+        $p.ExitCode | Should -Be $Code
+        [void]$stop.Reset(); [void]$cancel.Reset()
+        $stop.Dispose(); $cancel.Dispose()
+    }
+}
+
 Describe 'Intune content encryption' {
     It 'produces HMAC + IV + ciphertext that decrypts to the original' {
         $src = Join-Path $script:TestRoot 'plain.bin'

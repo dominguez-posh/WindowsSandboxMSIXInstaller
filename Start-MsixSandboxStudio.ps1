@@ -125,7 +125,7 @@ function Set-Busy([string]$Title) {
     $ui.BusyPill.Visibility = if ($on) { 'Visible' } else { 'Collapsed' }
     $ui.BusyBar.Visibility = if ($on) { 'Visible' } else { 'Hidden' }
     $ui.BusyText.Text = $Title
-    foreach ($b in 'BtnBuild', 'BtnBuildTest', 'BtnBuildAll', 'BtnPkgTest', 'BtnPkgSign', 'BtnPkgPublish', 'BtnDashSandbox', 'BtnToolchainUpdate', 'BtnToolchainForce', 'BtnRecipeSave', 'BtnCertIntune') {
+    foreach ($b in 'BtnBuild', 'BtnBuildTest', 'BtnBuildAll', 'BtnPkgTest', 'BtnPkgSign', 'BtnPkgPublish', 'BtnDashSandbox', 'BtnDashRecord', 'BtnToolchainUpdate', 'BtnToolchainForce', 'BtnRecipeSave', 'BtnCertIntune') {
         $ui[$b].IsEnabled = -not $on
     }
     if (-not $on) { Update-PackageButtons }
@@ -295,6 +295,34 @@ function Invoke-ToolchainUpdate([bool]$Force) {
 }
 
 Add-Click $ui.BtnDashNewRecipe { Show-Page 'Recipes'; Clear-RecipeForm }
+Add-Click $ui.BtnDashRecord {
+    if (-not (Get-MsixCertificate)) { throw 'Set up a signing certificate first (Certificate page).' }
+    if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first (Windows runs one at a time).' }
+    $dlg = New-Object Microsoft.Win32.OpenFileDialog
+    $dlg.Title = 'Installer to record (optional: Cancel to record without, e.g. to download it in the sandbox)'
+    $dlg.Filter = 'Installers (*.msi;*.exe)|*.msi;*.exe|All files (*.*)|*.*'
+    $installer = ''
+    $prefill = @{}
+    if ($dlg.ShowDialog($window)) {
+        $installer = $dlg.FileName
+        $info = Get-MsixInstallerInfo -Path $installer
+        $prefill = @{
+            DisplayName          = $info.ProductName
+            PackageName          = ConvertTo-MsixPackageName (($info.Manufacturer -split '\s')[0] + '.' + $info.ProductName)
+            Version              = $info.Version
+            PublisherDisplayName = $info.Manufacturer
+        }
+    }
+    Start-UiTask -Title 'Recording: Start recording in the sandbox, install the app, Stop recording' -Arguments @{ Installer = $installer; Prefill = $prefill } -Work {
+        param($Installer, $Prefill)
+        Start-MsixRecording -InstallerPath $Installer @Prefill
+    } -OnDone {
+        param($result, $err)
+        if ($err -or -not $result) { return }
+        $r = $result[-1]
+        if ($r.PackagePath) { Show-Page 'Packages'; Select-Package $r.PackagePath }
+    }
+}
 Add-Click $ui.BtnDashSandbox {
     if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; Windows runs one at a time.' }
     Start-UiTask -Title 'Starting interactive sandbox' -Work { Start-MsixSandbox | Out-Null }
@@ -362,7 +390,7 @@ function Update-ModeView {
     $ui.ArgumentsPanel.Visibility = if ($manual) { 'Collapsed' } else { 'Visible' }
     $ui.LblInstaller.Text = if ($manual) { 'Installer (optional: ready to run in the sandbox; leave empty to download or copy it yourself)' } else { 'Installer (.msi / .exe)' }
     $ui.BuildHint.Text = if ($manual) {
-        'Saves the recipe and opens a recording sandbox. After you click Finish recording there, everything else runs by itself.'
+        'Saves the recipe and opens the MSIX Recorder in a sandbox. After Stop recording there, everything else runs by itself.'
     } else { 'Saves the recipe, then runs the steps unattended. Each sandbox closes by itself when it is done.' }
     $ui.BtnBuild.Content = if ($manual) { 'Record + sign' } else { 'Package + sign' }
     $ui.BtnBuildTest.Content = if ($manual) { 'Record + sign + test' } else { 'Package + sign + test' }
@@ -456,7 +484,7 @@ function Start-Build {
     if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; close it first (Windows runs one at a time).' }
     $title = @{ Package = 'Packaging'; Test = 'Packaging and testing'; All = 'Running full pipeline' }[$Mode]
     $title = "$title $($form.DisplayName)"
-    if ($form.InstallMode -eq 'Manual') { $title = "Recording $($form.DisplayName): install it in the sandbox, then click Finish recording" }
+    if ($form.InstallMode -eq 'Manual') { $title = "Recording $($form.DisplayName): Start recording in the sandbox, install, Stop recording" }
     Start-UiTask -Title $title -NeedsGraph:($Mode -eq 'All') -Arguments @{
         R = $form; Mode = $Mode; GroupId = $script:SelectedGroupId; Intent = (Get-Intent)
     } -Work {

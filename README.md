@@ -20,7 +20,7 @@ starts from the same state and nothing is left on the host.
 | **Toolchain** | Downloads the MSIX Packaging Tool (offline bundle + license), its driver and the Windows SDK signing tools **once** to the host, with SHA256 hashes. Mapped read-only into every sandbox: no download per run, and it works without network. Checks Microsoft Learn for newer versions. |
 | **Recipes** | One JSON recipe per app: installer, silent arguments, package identity. Detects MSI properties and common EXE setup frameworks (Inno Setup, NSIS, WiX Burn, InstallShield, Advanced Installer, Squirrel) and suggests silent arguments. |
 | **Package** | Generates a Packaging Tool conversion template and runs the conversion **unattended** in a new sandbox, which closes itself when done. Logs land in the job folder. |
-| **Record manually** | For installers without silent mode, or apps that need setup clicks: the sandbox opens with the Packaging Tool **recording** and a small "MSIX recording" window. You install and configure the app yourself (the recipe's installer is ready to run there), click **Finish recording**, and the package is built, copied back, signed and optionally tested like any other. |
+| **Record** | For installers without silent mode, or apps that need setup clicks: the **MSIX Recorder** opens in a sandbox and installs everything by itself. You click **Start recording** (your installer starts automatically), install and configure the app, click **Stop recording**. The package is built, copied back, signed and optionally tested like any other. |
 | **Sign** | Signs on the **host** with signtool (SHA256 + RFC 3161 timestamp). The private key never enters a sandbox. |
 | **Test** | Installs the package in a second fresh sandbox (certificate trusted, network off), starts every app, takes screenshots and uninstalls it again. |
 | **Intune** | Uploads the package as a line-of-business app via Microsoft Graph (new app or new version of an existing one) and assigns it to a group. It can also create the trusted-certificate profile, so devices trust your packages. |
@@ -42,12 +42,31 @@ starts from the same state and nothing is left on the host.
    Its subject (for example `CN=Contoso Packaging`) becomes the publisher of every package.
 4. **Recipes**: drop an `.msi` or `.exe` on the window, check the suggested values and click
    **Package + sign + test**.
-   To install by hand instead, choose **Manual (record my installation)** and click **Record + sign**.
-   In the sandbox, install the app (the **Run** button starts your installer), then click **Finish recording**.
+   To install by hand instead, see [Recording an installation](#recording-an-installation).
 5. **Packages**: see the test result and screenshots, then click **Publish to Intune**.
 
 Devices must trust the signing certificate. With a self-signed one, click **Trust via Intune**
 on the Certificate page once and assign the profile to the same devices.
+
+## Recording an installation
+
+For setups without silent mode, or when you want to click through the installer and configure the app:
+
+1. Click **Record installation** on the dashboard and pick the installer (or cancel to download it in the
+   sandbox). Alternatively, choose **Manual (record my installation)** in a recipe and click **Record + sign**.
+2. A sandbox opens with the **MSIX Recorder**. It installs the Packaging Tool driver, the tool and your signing
+   certificate by itself and shows the progress. Check the package details meanwhile.
+3. Click **Start recording**. The recording starts and your installer launches automatically.
+   The recorder shrinks to a small bar with a timer.
+4. Install and configure the app. **Run** starts the installer again if needed.
+5. Click **Stop recording**. The Packaging Tool builds the package, the sandbox closes, and the host signs it.
+   The values you used are saved as a manual recipe for the next version.
+
+| Ready | While recording |
+|-------|-----------------|
+| ![MSIX Recorder](docs/images/recorder.png) | ![Recording bar](docs/images/recorder-bar.png) |
+
+Everything you change in the sandbox while recording goes into the package, so keep to the app.
 
 ## Quick start (PowerShell)
 
@@ -66,7 +85,7 @@ Connect-MsixIntune
 Invoke-MsixPipeline -RecipeName Contoso.Notes -Publish -GroupId <entra-group-id> -Intent required
 ```
 
-Single steps: `Invoke-MsixPackaging`, `Invoke-MsixSigning`, `Test-MsixPackage`, `Publish-MsixToIntune`,
+Single steps: `Invoke-MsixPackaging`, `Start-MsixRecording` (MSIX Recorder), `Invoke-MsixSigning`, `Test-MsixPackage`, `Publish-MsixToIntune`,
 `Publish-MsixCertificateToIntune`, `Start-MsixSandbox` (interactive). `Get-Help <command>` describes each.
 
 ## How it works
@@ -82,8 +101,10 @@ MsixSandboxStudio\Sandbox\ ─(read-only)──────▶ C:\MsixStudio\Too
 
 1. The host writes a job folder (`job.json`, conversion template, installer copy) and a `.wsb` file.
 2. Windows Sandbox starts and runs `Bootstrap.ps1` as logon command. It installs what the job needs,
-   does the work and reports progress in `status.json`. For manual recording, the template's "installer"
-   is `ManualCapture.ps1` (the recording window): the Packaging Tool captures until that window exits.
+   does the work and reports progress in `status.json`. For recordings, `Recorder.ps1` takes over once the
+   tool is installed. On **Start recording** it runs the Packaging Tool with a template whose "installer"
+   is `RecordingHold.ps1`. That process starts your setup and waits. **Stop recording** signals it through a
+   named event, it exits, and the tool builds the package.
    Logs are kept in `%TEMP%` (excluded from captures) during the run and copied to `out\` at the end.
 3. The host follows `status.json`, picks up the results from `out\` and continues
    (signing, the next test or upload). Package and test sandboxes shut themselves down.
