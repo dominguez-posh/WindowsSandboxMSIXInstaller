@@ -401,6 +401,31 @@ function Get-IntuneWinInfo {
     finally { $zip.Dispose() }
 }
 
+function Get-IntuneWinInstallInfo {
+    <#
+    Name, version and install command of an .intunewin: from intune-app.json next to it (builds of this tool),
+    otherwise derived from the setup file (.msi silent, .ps1 via PowerShell, .exe as is).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    $info = Get-IntuneWinInfo -Path $Path
+    $paramFile = Join-Path (Split-Path $info.Path -Parent) 'intune-app.json'
+    if (Test-Path $paramFile) {
+        $def = Get-Content $paramFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($def.installCommandLine) {
+            return [pscustomobject]@{ Name = $def.displayName; Version = $def.displayVersion; Command = $def.installCommandLine; SetupFile = $info.SetupFile; FromParameterFile = $true }
+        }
+    }
+    $setup = $info.SetupFile
+    $command = switch -Regex ($setup) {
+        '\.msi$' { 'msiexec.exe /i "{0}" /qn /norestart' -f $setup }
+        '\.ps1$' { '"%SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ".\{0}"' -f $setup }
+        default  { '"{0}"' -f $setup }
+    }
+    $name = [IO.Path]::GetFileNameWithoutExtension($info.Path)
+    [pscustomobject]@{ Name = $name; Version = ''; Command = $command; SetupFile = $setup; FromParameterFile = $false }
+}
+
 function Expand-IntuneWinPackage {
     <#
     .SYNOPSIS

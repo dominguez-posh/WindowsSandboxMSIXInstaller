@@ -148,6 +148,7 @@ $script:Task = $null
 function Get-GraphAccessToken {
     # Hands the UI thread's Graph sign-in to a background runspace.
     if (-not (Get-MsixIntuneContext)) { return $null }
+    Update-MsixIntuneToken   # a Keevault sign-in is renewed here before the token goes to the task
     try {
         $resp = Invoke-MgGraphRequest -Uri 'https://graph.microsoft.com/v1.0/organization?$select=id' -OutputType HttpResponseMessage
         $resp.RequestMessage.Headers.Authorization.Parameter
@@ -254,6 +255,7 @@ function Update-ConnectionStatus {
     }
     # Only the button that applies is enabled (as in the MFA tool)
     $ui.BtnIntuneSignIn.IsEnabled = -not ($c -and $c.Account)
+    $ui.BtnIntuneSignInMenu.IsEnabled = $ui.BtnIntuneSignIn.IsEnabled
     $ui.BtnIntuneSignOut.IsEnabled = [bool]($c -and $c.Account)
 }
 
@@ -333,29 +335,33 @@ Add-Click $ui.BtnHeaderSettings { Show-Page 'Settings' }
 # ---------------------------------------------------------------- dashboard
 function New-ReadinessCard {
     param([string]$Glyph, [string]$Title, [ValidateSet('ok', 'warn', 'bad')][string]$State, [string]$Text, [string]$ActionText, [scriptblock]$Action)
+    # One compact row: icon | title + state text | action button | state dot
     $color = @{ ok = Get-Brush 'Success'; warn = ConvertTo-Brush '#B45309'; bad = Get-Brush 'Danger' }[$State]
     $border = New-Object System.Windows.Controls.Border
-    $border.Style = $window.FindResource('TileCard')
-    $sp = New-Object System.Windows.Controls.StackPanel
-    $head = New-Object System.Windows.Controls.DockPanel
+    $border.BorderBrush = ConvertTo-Brush '#EEF1F4'; $border.BorderThickness = '0,0,0,1'; $border.Padding = '0,7'
+    $row = New-Object System.Windows.Controls.DockPanel
     $dot = New-Object System.Windows.Shapes.Ellipse
-    $dot.Width = 10; $dot.Height = 10; $dot.Fill = $color
+    $dot.Width = 10; $dot.Height = 10; $dot.Fill = $color; $dot.VerticalAlignment = 'Center'; $dot.Margin = '10,0,0,0'
     [System.Windows.Controls.DockPanel]::SetDock($dot, 'Right')
-    $ico = New-Object System.Windows.Controls.TextBlock
-    $ico.Text = $Glyph; $ico.Style = $window.FindResource('Glyph'); $ico.Foreground = Get-Brush 'Primary'
-    $t = New-Object System.Windows.Controls.TextBlock
-    $t.Text = $Title; $t.Style = $window.FindResource('CardTitle')
-    [void]$head.Children.Add($dot); [void]$head.Children.Add($ico); [void]$head.Children.Add($t)
-    $d = New-Object System.Windows.Controls.TextBlock
-    $d.Text = $Text; $d.Style = $window.FindResource('Hint'); $d.Margin = '0,6,0,0'
-    [void]$sp.Children.Add($head); [void]$sp.Children.Add($d)
+    [void]$row.Children.Add($dot)
     if ($ActionText) {
         $b = New-Object System.Windows.Controls.Button
-        $b.Content = $ActionText; $b.Style = $window.FindResource('SmallButton'); $b.HorizontalAlignment = 'Left'; $b.Margin = '0,8,0,0'
+        $b.Content = $ActionText; $b.Style = $window.FindResource('SmallButton')
+        [System.Windows.Controls.DockPanel]::SetDock($b, 'Right')
         Add-Click $b $Action
-        [void]$sp.Children.Add($b)
+        [void]$row.Children.Add($b)
     }
-    $border.Child = $sp
+    $ico = New-Object System.Windows.Controls.TextBlock
+    $ico.Text = $Glyph; $ico.Style = $window.FindResource('Glyph'); $ico.Foreground = Get-Brush 'Primary'; $ico.VerticalAlignment = 'Center'
+    [void]$row.Children.Add($ico)
+    $sp = New-Object System.Windows.Controls.StackPanel
+    $t = New-Object System.Windows.Controls.TextBlock
+    $t.Text = $Title; $t.FontWeight = 'SemiBold'
+    $d = New-Object System.Windows.Controls.TextBlock
+    $d.Text = $Text; $d.Style = $window.FindResource('Hint'); $d.TextWrapping = 'NoWrap'; $d.TextTrimming = 'CharacterEllipsis'; $d.ToolTip = $Text
+    [void]$sp.Children.Add($t); [void]$sp.Children.Add($d)
+    [void]$row.Children.Add($sp)
+    $border.Child = $row
     $border
 }
 
@@ -393,13 +399,14 @@ function Update-Dashboard {
     )
     if ($script:Mode -eq 'Win32') { $cards = @($cards | Where-Object { $_.Title -notin 'Toolchain', 'Signing certificate' }) }
     foreach ($card in $cards) { [void]$ui.ReadinessGrid.Children.Add((New-ReadinessCard @card)) }
+    $ui.ReadinessGrid.Children[$ui.ReadinessGrid.Children.Count - 1].BorderThickness = '0'
     if ($script:Mode -eq 'Win32') {
-        $ui.GrpStat1.Header = 'Win32 apps'; $ui.StatRecipes.Text = @(Get-Win32AppProject).Count
-        $ui.GrpStat2.Header = 'Built .intunewin packages'; $ui.StatPackages.Text = @(Get-Win32AppBuild).Count
+        $ui.StatLabel1.Text = 'Win32 apps'; $ui.StatRecipes.Text = @(Get-Win32AppProject).Count
+        $ui.StatLabel2.Text = 'Built .intunewin packages'; $ui.StatPackages.Text = @(Get-Win32AppBuild).Count
     }
     else {
-        $ui.GrpStat1.Header = 'Recipes'; $ui.StatRecipes.Text = @(Get-MsixRecipe).Count
-        $ui.GrpStat2.Header = 'Packages in output'; $ui.StatPackages.Text = @(Get-ChildItem (Get-MsixWorkspace).Output -Filter '*.msix' -ErrorAction SilentlyContinue).Count
+        $ui.StatLabel1.Text = 'Recipes'; $ui.StatRecipes.Text = @(Get-MsixRecipe).Count
+        $ui.StatLabel2.Text = 'Packages in output'; $ui.StatPackages.Text = @(Get-ChildItem (Get-MsixWorkspace).Output -Filter '*.msix' -ErrorAction SilentlyContinue).Count
     }
     Update-SandboxState
     Update-ConnectionStatus
@@ -430,24 +437,102 @@ function Start-Recording {
     }
 }
 
+function Show-RecordDialog {
+    <#
+    Asked before every recording: starting point (clean, existing MSIX, existing Win32 app) and the installer
+    that runs during the recording. Returns the parameters for Start-MsixRecording, or $null when cancelled.
+    #>
+    param([string]$BasePackage)
+    [xml]$x = Get-Content (Join-Path $PSScriptRoot 'UI\RecordWindow.xaml') -Raw -Encoding UTF8
+    $dlg = [Windows.Markup.XamlReader]::Load([System.Xml.XmlNodeReader]::new($x))
+    $dlg.Owner = $window
+    $d = @{}
+    foreach ($n in 'RbBaseNone', 'RbBaseMsix', 'RbBaseWin32', 'PanelBaseMsix', 'PanelBaseWin32', 'TxtBaseMsix', 'TxtBaseWin32', 'TxtBaseWin32Command',
+            'TxtBaseWin32Hint', 'BtnBaseMsixBrowse', 'BtnBaseWin32Browse', 'TxtInstallerHeader', 'TxtInstaller', 'BtnInstallerBrowse', 'BtnInstallerClear',
+            'ChkAutoStart', 'TxtInstallerHint', 'BtnRecordStart', 'BtnRecordCancel') { $d[$n] = $dlg.FindName($n) }
+    $script:RecordResult = $null
+
+    $update = {
+        $hasBase = -not $d.RbBaseNone.IsChecked
+        $d.PanelBaseMsix.IsEnabled = [bool]$d.RbBaseMsix.IsChecked
+        $d.PanelBaseWin32.IsEnabled = [bool]$d.RbBaseWin32.IsChecked
+        $d.TxtInstallerHeader.Text = if ($hasBase) { '2. Update to install' } else { '2. Installer to record' }
+        $d.TxtInstallerHint.Text = if ($hasBase) { "Leave empty to start the app's own updater in the sandbox, or download the new setup there." }
+                                   else { 'Leave empty to download the installer in the sandbox or paste it from the host.' }
+        $d.ChkAutoStart.IsEnabled = [bool]$d.TxtInstaller.Text
+    }
+    $pick = {
+        param([string]$Title, [string]$Filter)
+        $f = New-Object Microsoft.Win32.OpenFileDialog
+        $f.Title = $Title; $f.Filter = $Filter
+        if ($f.ShowDialog($dlg)) { $f.FileName }
+    }
+    foreach ($rb in $d.RbBaseNone, $d.RbBaseMsix, $d.RbBaseWin32) { $rb.Add_Checked({ & $update }) }
+    $d.BtnBaseMsixBrowse.Add_Click({
+        $file = & $pick 'Existing MSIX package (starting point)' 'MSIX packages (*.msix)|*.msix'
+        if ($file) { $d.TxtBaseMsix.Text = $file }
+    })
+    $d.BtnBaseWin32Browse.Add_Click({
+        $file = & $pick 'Existing Win32 app (starting point)' 'Win32 apps (*.intunewin)|*.intunewin'
+        if (-not $file) { return }
+        try {
+            $info = Get-IntuneWinInstallInfo -Path $file
+            $d.TxtBaseWin32.Text = $file
+            $d.TxtBaseWin32Command.Text = $info.Command
+            $d.TxtBaseWin32Hint.Text = if ($info.FromParameterFile) { "Command from intune-app.json ($($info.Name) $($info.Version))." }
+                                       else { "Derived from the setup file $($info.SetupFile): check the arguments (silent install)." }
+        }
+        catch { Show-Error $_.Exception.Message }
+    })
+    $d.BtnInstallerBrowse.Add_Click({
+        $file = & $pick 'Installer to run during the recording' 'Installers (*.msi;*.exe)|*.msi;*.exe|All files (*.*)|*.*'
+        if ($file) { $d.TxtInstaller.Text = $file; & $update }
+    })
+    $d.BtnInstallerClear.Add_Click({ $d.TxtInstaller.Text = ''; & $update })
+    $d.BtnRecordCancel.Add_Click({ $dlg.Close() })
+    $d.BtnRecordStart.Add_Click({
+        $p = @{ AutoStart = [bool]$d.ChkAutoStart.IsChecked }
+        if ($d.RbBaseMsix.IsChecked) {
+            if (-not $d.TxtBaseMsix.Text) { Show-Error 'Choose the MSIX package to start from.'; return }
+            $p.BasePackage = $d.TxtBaseMsix.Text
+        }
+        if ($d.RbBaseWin32.IsChecked) {
+            if (-not $d.TxtBaseWin32.Text) { Show-Error 'Choose the .intunewin to start from.'; return }
+            if (-not $d.TxtBaseWin32Command.Text.Trim()) { Show-Error 'Enter the install command of the Win32 app.'; return }
+            $p.BaseIntuneWin = $d.TxtBaseWin32.Text
+            $p.BaseInstallCommand = $d.TxtBaseWin32Command.Text.Trim()
+        }
+        if ($d.TxtInstaller.Text) {
+            $p.InstallerPath = $d.TxtInstaller.Text
+            # Identity from the installer only for a new package (an MSIX base brings its own)
+            if (-not $p.BasePackage) {
+                $info = Get-MsixInstallerInfo -Path $p.InstallerPath
+                if ($info.ProductName) {
+                    $p.DisplayName = $info.ProductName
+                    $p.PackageName = ConvertTo-MsixPackageName (($info.Manufacturer -split '\s')[0] + '.' + $info.ProductName)
+                    $p.PublisherDisplayName = $info.Manufacturer
+                }
+                if ($info.Version) { $p.Version = $info.Version }
+            }
+        }
+        $script:RecordResult = $p
+        $dlg.Close()
+    })
+
+    if ($BasePackage) { $d.TxtBaseMsix.Text = $BasePackage; $d.RbBaseMsix.IsChecked = $true }
+    & $update
+    [void]$dlg.ShowDialog()
+    $script:RecordResult
+}
+
 Add-Click $ui.BtnDashNewRecipe { Show-Page 'Recipes'; Clear-RecipeForm }
 Add-Click $ui.BtnDashRecord {
     Assert-ReadyForSandbox
-    $dlg = New-Object Microsoft.Win32.OpenFileDialog
-    $dlg.Title = 'Installer to record (optional: Cancel to record without, e.g. to download it in the sandbox)'
-    $dlg.Filter = 'Installers (*.msi;*.exe)|*.msi;*.exe|All files (*.*)|*.*'
-    $p = @{}
-    if ($dlg.ShowDialog($window)) {
-        $info = Get-MsixInstallerInfo -Path $dlg.FileName
-        $p = @{
-            InstallerPath        = $dlg.FileName
-            DisplayName          = $info.ProductName
-            PackageName          = ConvertTo-MsixPackageName (($info.Manufacturer -split '\s')[0] + '.' + $info.ProductName)
-            Version              = $info.Version
-            PublisherDisplayName = $info.Manufacturer
-        }
-    }
-    Start-Recording -Parameters $p -Title 'Recording: Start recording in the sandbox, install the app, Stop recording'
+    $p = Show-RecordDialog
+    if (-not $p) { return }
+    $title = if ($p.BasePackage -or $p.BaseIntuneWin) { 'Recording an update: Start recording in the sandbox, the starting point is installed, then the update' }
+             else { 'Recording: Start recording in the sandbox, install the app, Stop recording' }
+    Start-Recording -Parameters $p -Title $title
 }
 Add-Click $ui.BtnDashSandbox {
     if (Test-MsixSandboxRunning) { throw 'A Windows Sandbox is already open; Windows runs one at a time.' }
@@ -755,11 +840,8 @@ Add-Click $ui.BtnPkgTest {
 Add-Click $ui.BtnPkgUpdate {
     $p = $ui.PackageList.SelectedItem.Tag
     Assert-ReadyForSandbox
-    $dlg = New-Object Microsoft.Win32.OpenFileDialog
-    $dlg.Title = "Update installer for $($p.DisplayName) (optional: Cancel to update with the app's own updater)"
-    $dlg.Filter = 'Installers (*.msi;*.exe)|*.msi;*.exe|All files (*.*)|*.*'
-    $params = @{ BasePackage = $p.Path }
-    if ($dlg.ShowDialog($window)) { $params.InstallerPath = $dlg.FileName }
+    $params = Show-RecordDialog -BasePackage $p.Path
+    if (-not $params) { return }
     Start-Recording -Parameters $params -Title "Updating $($p.DisplayName): Start recording in the sandbox, run the updates, Stop recording"
 }
 Add-Click $ui.BtnPkgDoc {
@@ -1280,26 +1362,69 @@ $script:SelectedGroupId = $null
 function Get-Intent { if ($ui.IntentAvailable.IsChecked) { 'available' } else { 'required' } }
 
 function Connect-Intune {
+    param([ValidateSet('Windows', 'Keevault')][string]$Method = 'Windows')
+    $tenant = $ui.TxtTenantId.Text.Trim()
     $window.Cursor = 'Wait'
     try {
-        $tenant = $ui.TxtTenantId.Text.Trim()
-        Invoke-InteractiveSignIn { Connect-MsixIntune -TenantId $tenant | Out-Null }
+        if ($Method -eq 'Keevault') {
+            # Keevault and the embedded sign-in window take the foreground; the tool keeps painting meanwhile
+            # but takes no clicks.
+            $window.IsEnabled = $false
+            $pump = { $window.Dispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background) }
+            Connect-MsixIntuneWithKeevault -TenantId $tenant -Owner $window -OnWait $pump | Out-Null
+        }
+        else { Invoke-InteractiveSignIn { Connect-MsixIntune -TenantId $tenant | Out-Null } }
     }
-    finally { $window.Cursor = $null }
+    finally { $window.IsEnabled = $true; $window.Cursor = $null; [void]$window.Activate() }
     Update-ConnectionStatus
     Update-IntuneView
     Update-Dashboard
 }
+
+function Show-SignInMenu($Target) {
+    # Options of the split button next to Sign in
+    $kv = Find-KeevaultMcp
+    $menu = New-Object System.Windows.Controls.ContextMenu
+    $items = @(
+        @{ Glyph = [char]0xE77B; Header = 'Sign in with Microsoft account'; Text = 'Windows sign-in dialog (Web Account Manager), as before.'; Method = 'Windows'; Enabled = $true }
+        @{ Glyph = [char]0xE72E; Header = 'Sign in with Keevault'; Method = 'Keevault'; Enabled = ($kv.Installed -and $kv.McpEnabled)
+           Text = $(if (-not $kv.Installed) { 'Keevault is not installed.' }
+                    elseif (-not $kv.McpEnabled) { 'Switch on AI agents (MCP) in Keevault first.' }
+                    elseif (-not $kv.Running) { 'Start and unlock Keevault first. You pick the account in Keevault; user name, password and one-time code are filled in.' }
+                    else { 'You pick the account in Keevault; user name, password and one-time code are filled in.' }) }
+    )
+    foreach ($i in $items) {
+        $mi = New-Object System.Windows.Controls.MenuItem
+        $mi.Header = $i.Header; $mi.Tag = [string]$i.Glyph; $mi.ToolTip = $i.Text; $mi.IsEnabled = $i.Enabled
+        # The menu shows the text below the title; no extra tooltip popup
+        [System.Windows.Controls.ToolTipService]::SetIsEnabled($mi, $false)
+        $script:SignInMenuMethods[$mi] = $i.Method
+        $mi.Add_Click({
+            param($src)
+            try { Connect-Intune -Method $script:SignInMenuMethods[$src] } catch { Show-Error $_.Exception.Message }
+        })
+        [void]$menu.Items.Add($mi)
+    }
+    $menu.PlacementTarget = $Target
+    $menu.Placement = 'Bottom'
+    # Right edge of the menu below the right edge of the arrow (its shadow margin is 8 px)
+    $menu.Add_Opened({ param($m) $m.HorizontalOffset = $m.PlacementTarget.ActualWidth - $m.ActualWidth + 8 })
+    $menu.IsOpen = $true
+}
+$script:SignInMenuMethods = @{}
 
 function Update-IntuneView {
     $c = Get-MsixIntuneContext
     $ui.IntuneAccount.Text = if ($c -and $c.Account) { $c.Account } else { 'Not signed in' }
     $ui.IntuneTenant.Text = if ($c -and $c.Account) { "Tenant $($c.TenantId)" } else { 'Sign in to publish apps and the certificate profile.' }
     $ui.BtnIntunePageSignIn.IsEnabled = -not ($c -and $c.Account)
+    $ui.BtnIntunePageSignInMenu.IsEnabled = $ui.BtnIntunePageSignIn.IsEnabled
     Update-ConnectionStatus
 }
 Add-Click $ui.BtnIntuneSignIn { Connect-Intune }
 Add-Click $ui.BtnIntunePageSignIn { Connect-Intune }
+Add-Click $ui.BtnIntuneSignInMenu { Show-SignInMenu $ui.BtnIntuneSignInMenu }
+Add-Click $ui.BtnIntunePageSignInMenu { Show-SignInMenu $ui.BtnIntunePageSignInMenu }
 Add-Click $ui.BtnIntuneSignOut { Disconnect-MsixIntune; Update-IntuneView; Update-Dashboard }
 Add-Click $ui.BtnGroupSearch {
     if (-not (Get-MsixIntuneContext)) { throw 'Sign in first.' }

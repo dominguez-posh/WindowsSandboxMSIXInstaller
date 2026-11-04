@@ -1,0 +1,65 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Record installation" Width="720" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="{StaticResource WindowBackground}" Foreground="{StaticResource Text}" FontFamily="Segoe UI">
+    <!-- Asked before every recording: starting point in the sandbox (clean, existing MSIX, existing Win32 app)
+         and the installer that runs during the recording (the update, when there is a starting point). -->
+    <StackPanel>
+        <Border Background="{StaticResource HeaderBackground}" Padding="24,16">
+            <StackPanel>
+                <TextBlock Text="Prepare the recording" Foreground="White" FontSize="20" FontWeight="SemiBold"/>
+                <TextBlock Text="What should be installed in the sandbox first, and what runs during the recording?" Foreground="#94A3B8" FontSize="12" Margin="0,4,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <GroupBox Header="1. Starting point" Margin="16,16,16,0">
+            <StackPanel>
+                <RadioButton x:Name="RbBaseNone" GroupName="Base" IsChecked="True" Margin="0,0,0,2">
+                    <TextBlock><Run Text="Clean sandbox" FontWeight="SemiBold"/><Run Text="  new package from scratch" Foreground="{StaticResource MutedText}"/></TextBlock>
+                </RadioButton>
+
+                <RadioButton x:Name="RbBaseMsix" GroupName="Base" Margin="0,10,0,2">
+                    <TextBlock><Run Text="Existing MSIX package" FontWeight="SemiBold"/><Run Text="  its installed state is restored, then you install the update" Foreground="{StaticResource MutedText}"/></TextBlock>
+                </RadioButton>
+                <DockPanel x:Name="PanelBaseMsix" Margin="22,4,0,0" IsEnabled="False">
+                    <Button x:Name="BtnBaseMsixBrowse" DockPanel.Dock="Right" Content="Browse ..." Style="{StaticResource SecondaryButton}" Margin="6,0,0,0"/>
+                    <TextBox x:Name="TxtBaseMsix" IsReadOnly="True"/>
+                </DockPanel>
+
+                <RadioButton x:Name="RbBaseWin32" GroupName="Base" Margin="0,12,0,2">
+                    <TextBlock><Run Text="Existing Win32 app (.intunewin)" FontWeight="SemiBold"/><Run Text="  installed with its install command, then you install the update" Foreground="{StaticResource MutedText}"/></TextBlock>
+                </RadioButton>
+                <StackPanel x:Name="PanelBaseWin32" Margin="22,4,0,0" IsEnabled="False">
+                    <DockPanel>
+                        <Button x:Name="BtnBaseWin32Browse" DockPanel.Dock="Right" Content="Browse ..." Style="{StaticResource SecondaryButton}" Margin="6,0,0,0"/>
+                        <TextBox x:Name="TxtBaseWin32" IsReadOnly="True"/>
+                    </DockPanel>
+                    <TextBlock Text="Install command (runs in the decrypted package folder)" Style="{StaticResource Label}" Margin="0,8,0,0"/>
+                    <TextBox x:Name="TxtBaseWin32Command" FontFamily="Consolas" FontSize="12" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="TxtBaseWin32Hint" Style="{StaticResource Hint}" Margin="0,4,0,0"/>
+                </StackPanel>
+                <TextBlock Text="The starting point is installed after you click Start recording, so it is part of the new package." Style="{StaticResource Hint}" Margin="0,12,0,0"/>
+            </StackPanel>
+        </GroupBox>
+
+        <GroupBox Margin="16,0,16,0">
+            <GroupBox.Header>
+                <TextBlock x:Name="TxtInstallerHeader" Text="2. Installer to record"/>
+            </GroupBox.Header>
+            <StackPanel>
+                <DockPanel>
+                    <Button x:Name="BtnInstallerClear" DockPanel.Dock="Right" Content="Clear" Style="{StaticResource SecondaryButton}" Margin="6,0,0,0"/>
+                    <Button x:Name="BtnInstallerBrowse" DockPanel.Dock="Right" Content="Browse ..." Style="{StaticResource SecondaryButton}" Margin="6,0,0,0"/>
+                    <TextBox x:Name="TxtInstaller" IsReadOnly="True"/>
+                </DockPanel>
+                <CheckBox x:Name="ChkAutoStart" Content="Start it automatically when the recording starts (after the starting point)" IsChecked="True" Margin="0,10,0,0"/>
+                <TextBlock x:Name="TxtInstallerHint" Text="Leave empty to download the installer or start the app's own updater in the sandbox yourself." Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+            </StackPanel>
+        </GroupBox>
+
+        <DockPanel Margin="16,0,16,16" LastChildFill="False">
+            <Button x:Name="BtnRecordStart" DockPanel.Dock="Right" Tag="&#xE7C8;" Content="Open recorder"/>
+            <Button x:Name="BtnRecordCancel" DockPanel.Dock="Right" Content="Cancel" Style="{StaticResource SecondaryButton}"/>
+        </DockPanel>
+    </StackPanel>
+</Window>

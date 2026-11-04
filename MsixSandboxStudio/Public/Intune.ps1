@@ -24,8 +24,50 @@ function Connect-MsixIntune {
 }
 
 function Disconnect-MsixIntune {
+    $script:IntuneToken = $null
     Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
     Write-MsixLog 'Signed out of Microsoft Graph.'
+}
+
+# Sign-ins with an own token (Keevault, see Keevault.ps1): Connect-MgGraph -AccessToken does not renew the token,
+# so the refresh token is kept here (memory only) and used shortly before the access token expires.
+$script:IntuneToken = $null
+
+function Request-MsixIntuneToken {
+    param([string]$Tenant, [Parameter(Mandatory)][hashtable]$Body)
+    if (-not $Tenant) { $Tenant = 'organizations' }
+    $Body.client_id = $script:GraphClientId
+    $Body.scope = (@($script:GraphScopes | ForEach-Object { "https://graph.microsoft.com/$_" }) + 'offline_access') -join ' '
+    try { Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/token" -Body $Body -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 30 }
+    catch {
+        $detail = try { ($_.ErrorDetails.Message | ConvertFrom-Json).error_description } catch { $null }
+        throw "Token request failed: $(if ($detail) { $detail } else { $_.Exception.Message })"
+    }
+}
+
+function Set-MsixIntuneToken {
+    param([Parameter(Mandatory)]$Token, [string]$Tenant)
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    Connect-MgGraph -AccessToken (ConvertTo-SecureString $Token.access_token -AsPlainText -Force) -NoWelcome -ErrorAction Stop | Out-Null
+    # Renew against the tenant actually signed in to
+    $tenantId = (Get-MgContext).TenantId
+    $script:IntuneToken = @{
+        Refresh = $Token.refresh_token
+        Expires = (Get-Date).AddSeconds([int]$Token.expires_in)
+        Tenant  = $(if ($tenantId) { $tenantId } else { $Tenant })
+    }
+}
+
+function Update-MsixIntuneToken {
+    <# Renews an own-token sign-in when it expires within 5 minutes; does nothing for a normal Connect-MgGraph sign-in. #>
+    $t = $script:IntuneToken
+    if (-not $t -or -not $t.Refresh -or $t.Expires -gt (Get-Date).AddMinutes(5)) { return }
+    try {
+        $token = Request-MsixIntuneToken -Tenant $t.Tenant -Body @{ grant_type = 'refresh_token'; refresh_token = $t.Refresh }
+        Set-MsixIntuneToken -Token $token -Tenant $t.Tenant
+        Write-MsixLog 'Microsoft Graph sign-in renewed.'
+    }
+    catch { Write-MsixLog "Could not renew the Microsoft Graph sign-in: $($_.Exception.Message)" -Level Warning }
 }
 
 function Get-MsixIntuneContext {
@@ -35,6 +77,7 @@ function Get-MsixIntuneContext {
 
 function Invoke-MsixGraph {
     param([string]$Method = 'GET', [Parameter(Mandatory)][string]$Uri, $Body)
+    Update-MsixIntuneToken
     $p = @{ Method = $Method; Uri = "https://graph.microsoft.com/v1.0/$Uri"; ErrorAction = 'Stop' }
     if ($null -ne $Body) { $p.Body = ($Body | ConvertTo-Json -Depth 10); $p.ContentType = 'application/json' }
     Invoke-MgGraphRequest @p

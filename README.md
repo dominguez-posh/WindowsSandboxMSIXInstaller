@@ -76,6 +76,22 @@ Publish-Win32AppToIntune -BuildPath $build.BuildPath -SupersedeAppId <old-app-id
 Sign-ins (Intune, Azure Key Vault) open the Microsoft sign-in in front of the tool; there is no
 second console window. Look and behavior are the same as in the M365 MFA Administration tool.
 
+### Sign in with Keevault
+
+The arrow next to **Sign in** offers a second way: **Sign in with Keevault**. The tool connects to
+[Keevault](https://keevault.de) through its MCP interface (tool `request_microsoft_login`):
+
+1. Keevault comes to the front, you allow *MSIX Sandbox Studio* (first time only) and pick the Microsoft account.
+2. An embedded sign-in window (WebView2) opens the normal Microsoft sign-in. User name, password and the
+   current one-time code are filled in step by step; if the code has expired, a fresh one is fetched from
+   Keevault (`get_totp`). You can type yourself or pick another method (e.g. passkey) at any time.
+3. The token is renewed automatically before it expires (refresh token, kept in memory only).
+
+Requirements in Keevault (0.9.22 or later): *Settings > AI agents (MCP)* switched on, *Microsoft sign-ins for tools*
+allowed under *Additional rights*, and the account in a vault or folder released for AI agents. Keevault must
+be running and unlocked. The WebView2 SDK (about 1 MB of DLLs, signed by Microsoft) is downloaded from NuGet on
+first use into `Workspace\Toolchain\WebView2`; the WebView2 runtime is part of Windows 11.
+
 Devices must trust the signing certificate. With a self-signed one, click **Trust via Intune**
 on the Certificate page once and assign the profile to the same devices.
 
@@ -83,8 +99,13 @@ on the Certificate page once and assign the profile to the same devices.
 
 For setups without silent mode, or when you want to click through the installer and configure the app:
 
-1. Click **Record installation** on the dashboard and pick the installer (or cancel to download it in the
-   sandbox). Alternatively, choose **Manual (record my installation)** in a recipe and click **Record + sign**.
+1. Click **Record installation** on the dashboard. A dialog asks first:
+   - **Starting point**: a clean sandbox, an **existing MSIX package** or an **existing Win32 app (.intunewin)**
+     that is put in place first (see [Updating an existing package](#updating-an-existing-package)).
+   - **Installer to record** (with a starting point: the **update to install**), and whether it starts
+     automatically. Leave it empty to download the installer or run the app's own updater in the sandbox.
+
+   Alternatively, choose **Manual (record my installation)** in a recipe and click **Record + sign**.
 2. A sandbox opens with the **MSIX Recorder**. It installs the Packaging Tool driver, the tool and your signing
    certificate by itself and shows the progress. Check the package details meanwhile.
 3. Click **Start recording**. The recording starts and your installer launches automatically.
@@ -119,8 +140,8 @@ report, without clicks.
 
 ### Updating an existing package
 
-1. On **Packages**, choose the package and click **Update (record new version)**. Optionally pick the update
-   installer. Cancel if the app updates itself.
+1. On **Packages**, choose the package and click **Update (record new version)**: the record dialog opens with
+   this package as starting point. Optionally pick the update installer; leave it empty if the app updates itself.
 2. The recorder shows the base package. The version is already raised by one.
 3. **Start recording**: the old package is restored first, as a classic installation inside the capture
    (files to their real folders, registry imported, Start menu entries). Then the update installer starts,
@@ -129,6 +150,12 @@ report, without clicks.
 
 For the update to replace the old version on devices, it must be signed by the same publisher
 (certificate subject) as the base package. The tool warns if it is not.
+
+**From a Win32 app:** choose *Existing Win32 app (.intunewin)* in the record dialog. The `.intunewin` is decrypted
+on the host; the install command comes from the `intune-app.json` next to it (builds of this tool) or is derived
+from the setup file (`.msi` silent, `.ps1` via PowerShell, `.exe` as is: add its silent arguments). After
+**Start recording** it is installed inside the capture (exit codes 0, 1707, 3010, 1641 count as success), then
+the update runs. The result is an MSIX with the app and the update.
 
 ## Quick start (PowerShell)
 
@@ -186,6 +213,9 @@ Everything local lives in `Workspace\` (gitignored): `Toolchain`, `Certificates`
 - The certificate that was committed to this repository before version 2.0 is public.
   Do not trust it on any device; create your own instead.
 - The test sandbox runs without network access.
+- Keevault sign-in: credentials go only to Microsoft's sign-in pages (`login.microsoftonline.com`,
+  `login.microsoft.com`, `login.live.com`); each value is filled in once, a rejected password is not retried.
+  The embedded browser uses a temporary profile that is deleted afterwards. Nothing is stored on disk.
 - The documentation shows the screen as it was during the recording: license keys or credentials typed
   into a setup can be visible in screenshots. Check the report before sharing it, or switch the
   documentation off in the recorder for such installs. Keystrokes themselves are not recorded.

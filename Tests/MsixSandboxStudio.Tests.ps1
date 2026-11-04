@@ -279,6 +279,27 @@ Describe 'Win32 apps' {
         $LASTEXITCODE | Should -Be 1
         $out | Should -BeNullOrEmpty
     }
+    It 'takes the install command of a build from its intune-app.json (starting point of a recording)' {
+        $b = New-Win32AppPackage -Id $script:W32.Id
+        $i = Get-IntuneWinInstallInfo -Path $b.IntuneWin
+        $i.FromParameterFile | Should -BeTrue
+        $i.Command | Should -Match 'Install\.ps1'
+        $i.Name | Should -Be $script:W32.DisplayName
+    }
+    It 'derives the install command from the setup file <Setup> without parameter file' -ForEach @(
+        @{ Setup = 'setup.msi'; Pattern = '^msiexec\.exe /i "setup\.msi" /qn' }
+        @{ Setup = 'Install.ps1'; Pattern = 'sysnative.*-File "\.\\Install\.ps1"$' }
+        @{ Setup = 'setup.exe'; Pattern = '^"setup\.exe"$' }
+    ) {
+        $src = Join-Path $script:TestRoot "plain-$Setup"
+        New-Item -ItemType Directory $src -Force | Out-Null
+        Set-Content (Join-Path $src $Setup) 'x'
+        $file = Join-Path $script:TestRoot "plain-$Setup.intunewin"
+        New-IntuneWinPackage -SourceFolder $src -SetupFile $Setup -OutputFile $file | Out-Null
+        $i = Get-IntuneWinInstallInfo -Path $file
+        $i.FromParameterFile | Should -BeFalse
+        $i.Command | Should -Match $Pattern
+    }
     It 'builds an .intunewin whose content decrypts back to the source' {
         $b = New-Win32AppPackage -Id $script:W32.Id
         $info = Get-IntuneWinInfo -Path $b.IntuneWin
@@ -362,5 +383,53 @@ Describe 'Intune content encryption' {
         $plain = $aes.CreateDecryptor().TransformFinalBlock($bytes, 48, $bytes.Length - 48)
         [Convert]::ToBase64String($plain) | Should -Be ([Convert]::ToBase64String($data))
         $info.profileIdentifier | Should -Be 'ProfileVersion1'
+    }
+}
+
+Describe 'Keevault MCP client' {
+    BeforeAll {
+        # Stand-in for Keevault's MCP host: JSON-RPC over stdio, sends a notification before every reply
+        $script:FakeServer = Join-Path $script:TestRoot 'fake-mcp.ps1'
+        Set-Content $script:FakeServer -Encoding UTF8 -Value @'
+# Raw streams: setting [Console]::InputEncoding would drop input that already arrived
+$utf8 = New-Object Text.UTF8Encoding $false
+$in = New-Object IO.StreamReader ([Console]::OpenStandardInput()), $utf8
+$out = New-Object IO.StreamWriter ([Console]::OpenStandardOutput()), $utf8
+while ($null -ne ($line = $in.ReadLine())) {
+    $m = $line | ConvertFrom-Json
+    if ($null -eq $m.id) { continue }
+    $r = switch ($m.method) {
+        'initialize' { @{ protocolVersion = '2025-06-18'; serverInfo = @{ name = 'fake' } } }
+        'tools/call' {
+            if ($m.params.name -eq 'fail') { @{ content = @(@{ type = 'text'; text = 'Vom Benutzer abgelehnt' }); isError = $true } }
+            else { @{ content = @(@{ type = 'text'; text = '{}' }); structuredContent = @{ tool = $m.params.name; purpose = $m.params.arguments.purpose } } }
+        }
+    }
+    $out.WriteLine((@{ jsonrpc = '2.0'; method = 'notifications/message' } | ConvertTo-Json -Compress))
+    $out.WriteLine((@{ jsonrpc = '2.0'; id = $m.id; result = $r } | ConvertTo-Json -Depth 6 -Compress))
+    $out.Flush()
+}
+'@
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'powershell.exe'
+        $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $script:FakeServer
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true
+        $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding $false
+        $script:Mcp = [pscustomobject]@{ Process = [System.Diagnostics.Process]::Start($psi); NextId = 0; Pending = $null }
+    }
+    AfterAll { Close-KeevaultMcp $script:Mcp }
+
+    It 'answers requests by id and skips notifications' {
+        $r = & (Get-Module MsixSandboxStudio) { param($c) Invoke-KeevaultMcpRequest -Client $c -Method 'initialize' -TimeoutSeconds 30 } $script:Mcp
+        $r.serverInfo.name | Should -Be 'fake'
+    }
+    It 'returns the structured result of a tool, UTF-8 intact' {
+        $r = Invoke-KeevaultMcpTool -Client $script:Mcp -Name 'request_microsoft_login' -Arguments @{ purpose = 'Prüfung für Intune' } -TimeoutSeconds 30
+        $r.tool | Should -Be 'request_microsoft_login'
+        $r.purpose | Should -Be 'Prüfung für Intune'
+    }
+    It 'turns a tool error into an exception' {
+        { Invoke-KeevaultMcpTool -Client $script:Mcp -Name 'fail' -TimeoutSeconds 30 } | Should -Throw '*abgelehnt*'
     }
 }

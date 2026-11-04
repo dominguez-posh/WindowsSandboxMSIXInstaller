@@ -36,7 +36,8 @@
                     <Button x:Name="BtnMode" Tag="&#xE8AB;" Content="MSIX" Style="{StaticResource HeaderButton}" ToolTip="Switch between MSIX packages and Win32 apps (.intunewin)"/>
                     <Button x:Name="BtnHelp" Tag="&#xE897;" Content="Help" Style="{StaticResource HeaderButton}"/>
                     <Button x:Name="BtnHeaderSettings" Tag="&#xE713;" Content="Settings" Style="{StaticResource HeaderButton}"/>
-                    <Button x:Name="BtnIntuneSignIn" Tag="&#xE77B;" Content="Sign in"/>
+                    <Button x:Name="BtnIntuneSignIn" Tag="&#xE77B;" Content="Sign in" Style="{StaticResource SplitMainButton}" ToolTip="Sign in with your Microsoft account (Windows sign-in dialog)"/>
+                    <Button x:Name="BtnIntuneSignInMenu" Style="{StaticResource SplitDropButton}" ToolTip="More sign-in options (Keevault)"/>
                     <Button x:Name="BtnIntuneSignOut" Tag="&#xE7E8;" Content="Sign out" Style="{StaticResource HeaderButton}" IsEnabled="False"/>
                 </StackPanel>
             </Grid>
@@ -69,7 +70,7 @@
         <Grid Grid.Row="2" Margin="20,18,20,0">
 
             <!-- ===== Dashboard ===== -->
-            <ScrollViewer x:Name="PageDashboard" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="PageDashboard" Style="{StaticResource PageScroll}">
                 <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -160,18 +161,26 @@
                                 </WrapPanel>
                             </StackPanel>
                         </GroupBox>
-                        <StackPanel Grid.Column="2">
-                            <GroupBox x:Name="GrpStat1" Header="Recipes">
-                                <TextBlock x:Name="StatRecipes" Text="0" FontSize="30" FontWeight="SemiBold" Foreground="{StaticResource Primary}"/>
+                        <DockPanel Grid.Column="2">
+                            <UniformGrid DockPanel.Dock="Top" Columns="2" Margin="0,0,-12,0">
+                                <Border Style="{StaticResource TileCard}">
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatLabel1" Text="Recipes" Style="{StaticResource Hint}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                        <TextBlock x:Name="StatRecipes" Text="0" FontSize="26" FontWeight="SemiBold" Foreground="{StaticResource Primary}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource TileCard}">
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatLabel2" Text="Packages in output" Style="{StaticResource Hint}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                        <TextBlock x:Name="StatPackages" Text="0" FontSize="26" FontWeight="SemiBold" Foreground="{StaticResource Success}"/>
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+                            <GroupBox Header="Readiness of this computer">
+                                <StackPanel x:Name="ReadinessGrid" Margin="0,-8,0,-8"/>
                             </GroupBox>
-                            <GroupBox x:Name="GrpStat2" Header="Packages in output">
-                                <TextBlock x:Name="StatPackages" Text="0" FontSize="30" FontWeight="SemiBold" Foreground="{StaticResource Success}"/>
-                            </GroupBox>
-                        </StackPanel>
+                        </DockPanel>
                     </Grid>
-                    <GroupBox Header="Readiness of this computer">
-                        <UniformGrid x:Name="ReadinessGrid" Columns="3" Margin="0,0,-12,-12"/>
-                    </GroupBox>
                 </StackPanel>
             </ScrollViewer>
 
@@ -194,7 +203,7 @@
                         <ListBox x:Name="RecipeList" Style="{StaticResource MethodList}"/>
                     </DockPanel>
                 </GroupBox>
-                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Column="2" Style="{StaticResource PageScroll}">
                     <StackPanel>
                         <GroupBox>
                             <GroupBox.Header>
@@ -289,7 +298,7 @@
                         <ListBox x:Name="PackageList" Style="{StaticResource MethodList}"/>
                     </DockPanel>
                 </GroupBox>
-                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Column="2" Style="{StaticResource PageScroll}">
                     <StackPanel>
                         <GroupBox>
                             <GroupBox.Header><TextBlock x:Name="PkgTitle" Text="Select a package"/></GroupBox.Header>
@@ -345,7 +354,7 @@
                         <ListBox x:Name="Win32AppList" Style="{StaticResource MethodList}"/>
                     </DockPanel>
                 </GroupBox>
-                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Column="2" Style="{StaticResource PageScroll}">
                     <StackPanel>
                         <GroupBox>
                             <GroupBox.Header><TextBlock x:Name="W32Title" Text="New Win32 app"/></GroupBox.Header>
@@ -513,7 +522,7 @@
                         <ListBox x:Name="Win32BuildList" Style="{StaticResource MethodList}"/>
                     </DockPanel>
                 </GroupBox>
-                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Column="2" Style="{StaticResource PageScroll}">
                     <GroupBox>
                         <GroupBox.Header><TextBlock x:Name="W32BuildTitle" Text="Select a build"/></GroupBox.Header>
                         <StackPanel>
@@ -530,7 +539,7 @@
             </Grid>
 
             <!-- ===== Certificate ===== -->
-            <ScrollViewer x:Name="PageCertificate" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="PageCertificate" Visibility="Collapsed" Style="{StaticResource PageScroll}">
                 <StackPanel>
                     <GroupBox Header="Signing certificate">
                         <Grid>
@@ -596,7 +605,7 @@
             </ScrollViewer>
 
             <!-- ===== Intune ===== -->
-            <ScrollViewer x:Name="PageIntune" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="PageIntune" Visibility="Collapsed" Style="{StaticResource PageScroll}">
                 <StackPanel>
                     <GroupBox Header="Connection">
                         <StackPanel>
@@ -604,7 +613,8 @@
                             <TextBlock x:Name="IntuneTenant" Style="{StaticResource Hint}" Margin="0,4,0,10"/>
                             <TextBlock Text="Tenant (optional: ID or domain, e.g. for guest accounts)" Style="{StaticResource Label}"/>
                             <DockPanel>
-                                <Button x:Name="BtnIntunePageSignIn" DockPanel.Dock="Right" Tag="&#xE77B;" Content="Sign in"/>
+                                <Button x:Name="BtnIntunePageSignInMenu" DockPanel.Dock="Right" Style="{StaticResource SplitDropButton}" ToolTip="More sign-in options (Keevault)"/>
+                                <Button x:Name="BtnIntunePageSignIn" DockPanel.Dock="Right" Tag="&#xE77B;" Content="Sign in" Style="{StaticResource SplitMainButton}"/>
                                 <TextBox x:Name="TxtTenantId" Margin="0,4"/>
                             </DockPanel>
                         </StackPanel>
@@ -635,7 +645,7 @@
             </ScrollViewer>
 
             <!-- ===== Settings ===== -->
-            <ScrollViewer x:Name="PageSettings" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="PageSettings" Visibility="Collapsed" Style="{StaticResource PageScroll}">
                 <StackPanel>
                     <GroupBox Header="Toolchain">
                         <Grid>
@@ -704,7 +714,7 @@
                     <Button x:Name="BtnHelpClose" DockPanel.Dock="Right" Style="{StaticResource CloseButton}"/>
                     <TextBlock x:Name="HelpTitle" Text="Help" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </DockPanel>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Style="{StaticResource PageScroll}">
                     <StackPanel x:Name="HelpBody"/>
                 </ScrollViewer>
             </DockPanel>

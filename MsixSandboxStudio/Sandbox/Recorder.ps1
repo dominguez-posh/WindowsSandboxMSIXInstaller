@@ -32,6 +32,9 @@ $LocalInput = Join-Path $LocalDir 'input'
 $LocalOut   = Join-Path $LocalDir 'out'
 $job = Get-Content (Join-Path $JobDir 'job.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $BaseFile = if ($job.BasePackage) { Join-Path $LocalInput "base\$($job.BasePackage)" } else { $null }
+# Starting point Win32 app: decrypted on the host, installed with its install command when the recording starts
+$Win32Base = if ($job.BaseWin32) { Join-Path $LocalInput 'base-win32' } else { $null }
+$HasBase = [bool]($BaseFile -or $Win32Base)
 
 $StopEvent     = New-RecorderEvent 'MsixStudioStopRecording'
 $CancelEvent   = New-RecorderEvent 'MsixStudioCancelRecording'
@@ -175,14 +178,15 @@ $card2.SetBounds(12, 384, 414, 166)
 $card2.BackColor = $C.Card
 $card2.Add_Paint({ $_.Graphics.DrawRectangle((New-Object System.Drawing.Pen($C.CardLine, 1)), 0, 0, $card2.Width - 1, $card2.Height - 1) })
 $full.Controls.Add($card2)
-$card2.Controls.Add((New-Label $(if ($BaseFile) { 'Update' } else { 'Installer' }) 12 10 200 20 (New-Font 9.5 'Bold') $C.Text))
+$card2.Controls.Add((New-Label $(if ($HasBase) { 'Update' } else { 'Installer' }) 12 10 200 20 (New-Font 9.5 'Bold') $C.Text))
 $baseInfo = New-Label '' 12 34 388 34 (New-Font 8.5) $C.Text
 $baseInfo.BackColor = $C.Info
 $baseInfo.Padding = New-Object System.Windows.Forms.Padding(6, 3, 6, 3)
 if ($BaseFile) { $baseInfo.Text = "Base: $($job.BaseDisplayName) $($job.BaseVersion). Its installed state is restored when the recording starts; then run your updates." }
-$baseInfo.Visible = [bool]$BaseFile
+if ($Win32Base) { $baseInfo.Text = "Base: $($job.BaseDisplayName) $($job.BaseVersion) (Win32). It is installed when the recording starts; then the update." }
+$baseInfo.Visible = $HasBase
 $card2.Controls.Add($baseInfo)
-$listTop = if ($BaseFile) { 74 } else { 36 }
+$listTop = if ($HasBase) { 74 } else { 36 }
 $list = New-Object System.Windows.Forms.ListBox
 $list.BackColor = $C.Card; $list.ForeColor = $C.Text; $list.BorderStyle = 'FixedSingle'; $list.Font = New-Font 9.5
 $list.SetBounds(12, $listTop, 290, 56)
@@ -197,10 +201,11 @@ $chkAuto = New-Object System.Windows.Forms.CheckBox
 $chkAuto.Text = 'Start the installer automatically with the recording'
 $chkAuto.ForeColor = $C.Text; $chkAuto.Font = New-Font 9; $chkAuto.BackColor = [System.Drawing.Color]::Transparent
 $chkAuto.SetBounds(12, ($listTop + 60), 390, 22)
-$chkAuto.Checked = [bool]$files
+# Preset from the question on the host ("start it automatically"); still changeable here
+$chkAuto.Checked = [bool]$files -and ($job.AutoStart -ne $false)
 $chkAuto.Enabled = [bool]$files
 $card2.Controls.Add($chkAuto)
-$noFiles = New-Label $(if ($BaseFile) { 'No update installer provided: start the app''s own updater or download the new setup after the recording has begun.' } else { 'No installer provided: download it in the sandbox or paste it from the host (clipboard), then start it after the recording has begun.' }) 12 $listTop 290 56 (New-Font 8.5)
+$noFiles = New-Label $(if ($HasBase) { 'No update installer provided: start the app''s own updater or download the new setup after the recording has begun.' } else { 'No installer provided: download it in the sandbox or paste it from the host (clipboard), then start it after the recording has begun.' }) 12 $listTop 290 56 (New-Font 8.5)
 $noFiles.Visible = -not $files
 $card2.Controls.Add($noFiles)
 if (-not $files) { $list.Visible = $false; $btnRun.Visible = $false; $btnFolder.Visible = $false }
@@ -328,6 +333,12 @@ function Start-Recording {
         $root = if ($job.InstallLocation) { $job.InstallLocation } else { Join-Path $env:ProgramFiles $name }
         $holdArgs += " -Restore `"$BaseFile`" -InstallRoot `"$root`""
     }
+    if ($Win32Base) {
+        # The command has its own quotes: handed over in a file in %TEMP% (excluded from the capture)
+        $commandFile = Join-Path $TempDir 'base-command.txt'
+        [IO.File]::WriteAllText($commandFile, [string]$job.BaseCommand, (New-Object Text.UTF8Encoding $false))
+        $holdArgs += " -Win32Base `"$Win32Base`" -Win32CommandFile `"$commandFile`""
+    }
     $template = New-RecorderTemplate -PackageName $name -DisplayName $script:Result.DisplayName -PublisherName $job.Publisher `
         -PublisherDisplayName $publisherDisplay -Version $version `
         -InstallerPath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -InstallerArguments $holdArgs `
@@ -353,7 +364,7 @@ function Start-Recording {
         -RedirectStandardOutput (Join-Path $TempDir 'conversion.log') -RedirectStandardError (Join-Path $TempDir 'conversion.err.log') `
         -WindowStyle Hidden -PassThru
     $script:Started = Get-Date
-    $script:Restoring = [bool]$BaseFile
+    $script:Restoring = $HasBase
     $recTitle.Text = if ($script:Restoring) { "RESTORING  $([char]0x00B7)  $($job.BaseDisplayName) $($job.BaseVersion)" } else { "RECORDING  $([char]0x00B7)  $($script:Result.DisplayName)" }
     Set-UiState 'Recording'
 }
@@ -373,6 +384,7 @@ function Save-Documentation {
             AutoStarted  = $script:Result.AutoStarted
             Installer    = $script:Result.Installer
             BasePackage  = $job.BasePackage
+            BaseWin32    = $job.BaseWin32
             RestoreLog   = $(if (Test-Path $restoreLog) { @(Get-Content $restoreLog) } else { @() })
             Error        = $script:DocError
             Screen       = [System.Windows.Forms.SystemInformation]::VirtualScreen.Size.ToString()

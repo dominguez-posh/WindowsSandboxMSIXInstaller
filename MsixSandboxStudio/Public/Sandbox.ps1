@@ -235,6 +235,12 @@ function Start-MsixRecording {
     .PARAMETER BasePackage
     Update an existing package: its content is restored in the sandbox (files, registry, shortcuts) when the
     recording starts, then you run the updates. Identity is taken from it, the version is raised by one.
+    .PARAMETER BaseIntuneWin
+    Start from an existing Win32 app instead: the .intunewin is decrypted on the host and installed in the
+    sandbox with -BaseInstallCommand when the recording starts (so it is part of the package), then you run
+    the update.
+    .PARAMETER AutoStart
+    Start the installer (the update when there is a base) automatically after the base is in place.
     .OUTPUTS
     Object with State, PackagePath, JobPath, Recipe and Documentation.
     #>
@@ -243,6 +249,9 @@ function Start-MsixRecording {
         [string]$RecipeName,
         [string]$InstallerPath,
         [string]$BasePackage,
+        [string]$BaseIntuneWin,
+        [string]$BaseInstallCommand,
+        [bool]$AutoStart = $true,
         [string]$DisplayName = '',
         [string]$PackageName = '',
         [string]$Version = '1.0.0.0',
@@ -261,6 +270,16 @@ function Start-MsixRecording {
             $v = [version]$base.Version
             $Version = '{0}.{1}.{2}.{3}' -f $v.Major, $v.Minor, $v.Build, [Math]::Min(65535, $v.Revision + 1)
         }
+    }
+    if ($BasePackage -and $BaseIntuneWin) { throw 'Choose either an MSIX or a Win32 app as starting point, not both.' }
+    $win32Base = $null
+    if ($BaseIntuneWin) {
+        if (-not (Test-Path -LiteralPath $BaseIntuneWin)) { throw "Win32 app missing: $BaseIntuneWin" }
+        $win32Base = Get-IntuneWinInstallInfo -Path $BaseIntuneWin
+        if ($BaseInstallCommand) { $win32Base.Command = $BaseInstallCommand }
+        if (-not $win32Base.Command) { throw 'Enter the install command of the Win32 app.' }
+        if (-not $DisplayName) { $DisplayName = $win32Base.Name }
+        if (-not $PackageName) { $PackageName = ConvertTo-MsixPackageName $win32Base.Name }
     }
     $recipe = $null
     if ($RecipeName) {
@@ -290,11 +309,18 @@ function Start-MsixRecording {
         PublisherDisplayName = $PublisherDisplayName
         Publisher            = $publisher
         InstallLocation      = $(if ($recipe -and $recipe.InstallLocation) { $recipe.InstallLocation } else { '' })
+        AutoStart            = $AutoStart
     }
     if ($base) {
         $data.BasePackage = Split-Path $base.Path -Leaf
         $data.BaseDisplayName = $base.DisplayName
         $data.BaseVersion = $base.Version
+    }
+    if ($win32Base) {
+        $data.BaseWin32 = Split-Path $BaseIntuneWin -Leaf
+        $data.BaseCommand = $win32Base.Command
+        $data.BaseDisplayName = $win32Base.Name
+        $data.BaseVersion = $win32Base.Version
     }
     $job = New-MsixJob -Mode Record -Name $(if ($PackageName) { $PackageName } else { 'recording' }) -Data $data
     if ($InstallerPath) { Copy-Item -LiteralPath $InstallerPath -Destination (Join-Path $job 'input') }
@@ -302,9 +328,14 @@ function Start-MsixRecording {
         New-Item -ItemType Directory (Join-Path $job 'input\base') -Force | Out-Null
         Copy-Item -LiteralPath $base.Path -Destination (Join-Path $job 'input\base')
     }
+    if ($win32Base) {
+        # Decrypted on the host: the sandbox gets the plain content, installed there with the command above
+        Expand-IntuneWinPackage -Path $BaseIntuneWin -Destination (Join-Path $job 'input\base-win32') | Out-Null
+    }
     if ($cert -and (Test-Path $cert.CerPath)) { Copy-Item $cert.CerPath (Join-Path $job 'input\signing.cer') }
 
     if ($base) { Write-MsixLog "Opening the MSIX Recorder for an update of $($base.DisplayName) $($base.Version) -> $($data.Version)." }
+    elseif ($win32Base) { Write-MsixLog "Opening the MSIX Recorder: $($win32Base.Name) (Win32) is installed when the recording starts, then the update." }
     else { Write-MsixLog 'Opening the MSIX Recorder. In the sandbox: Start recording, install the app, Stop recording.' }
     $wsb = New-MsixSandboxConfig -JobPath $job -Networking ([bool]$settings.PackageNetworking) -MemoryMB $settings.SandboxMemoryMB -VGpu $settings.SandboxVGpu
     Start-MsixSandboxProcess -WsbPath $wsb
